@@ -413,6 +413,42 @@ static int nvme_mi_verify_resp_mic(struct nvme_mi_resp *resp)
 	return resp->mic != ~crc;
 }
 
+static int nvme_mi_get_semaphore_for_ep(__u8 eid)
+{
+	//TODO:Need to do the work here to open a semaphore with EID with max 2 users
+	//This may also need to spawn a thread to do any cleanup of semaphores in case of crash
+} 
+
+static int nvme_mi_release_slot(nvme_mi_ep_t ep, struct nvme_mi_req *req){
+	//TODO:Need to do the work here to release the semaphore
+	__u8 eid = nvme_mi_mctp_get_eid(ep);
+	__u8 slot = req->hdr->nmp & NVME_MI_NMP_CSI_MASK;
+	LOCK
+	//Update slot files
+	UNLOCK
+	ReleaseSemaphore(eid);
+}
+
+static int nvme_mi_get_free_slot(nvme_mi_ep_t ep, struct nvme_mi_req *req)
+{
+	struct nvme_mi_transport_mctp * mctp;
+
+	if((req->hdr->nmp & NVME_MI_NMP_NMIMT_MASK) >> NVME_MI_NMP_NMIMT_SHIFT == NVME_MI_MT_CONTROL && req->data_len >= sizeof(struct nvme_mi_primitive_req_hdr) ){
+		struct nvme_mi_primitive_req_hdr* prim_data = (struct nvme_mi_primitive_req_hdr*)req->data;
+		if(prim_data->cpo == NVME_MI_CPO_PAUSE || prim_data->cpo == NVME_MI_CPO_RESUME){
+			req->hdr->nmp &= ~NVME_MI_NMP_CSI_MASK;//Clear this for Pause and Resume primatives
+			return 0;
+		}
+	}
+	
+	int rc = get_semaphore_for_ep(nvme_mi_mctp_get_eid(ep));
+	LOCK;
+	//We need some kind of file object by name in memory here to know if slot 1 or slot two is available
+	UNLOCK;
+
+	return rc;
+}
+
 int nvme_mi_submit(nvme_mi_ep_t ep, struct nvme_mi_req *req,
 		   struct nvme_mi_resp *resp)
 {
@@ -445,6 +481,13 @@ int nvme_mi_submit(nvme_mi_ep_t ep, struct nvme_mi_req *req,
 
 	nvme_mi_ep_probe(ep);
 
+	rc = nvme_mi_get_free_slot(ep, req);//Note that this is going to block for a free slot
+	if (rc) {
+		nvme_msg(ep->root, LOG_INFO, "Failed to secure a command buffer\n");
+		errno = EIO;
+		return rc;
+	}
+
 	if (ep->transport->mic_enabled)
 		nvme_mi_calc_req_mic(req);
 
@@ -452,6 +495,8 @@ int nvme_mi_submit(nvme_mi_ep_t ep, struct nvme_mi_req *req,
 		nvme_mi_insert_delay(ep);
 
 	rc = ep->transport->submit(ep, req, resp);
+
+	nvme_mi_release_slot(ep,req);
 
 	if (nvme_mi_ep_has_quirk(ep, NVME_QUIRK_MIN_INTER_COMMAND_TIME))
 		nvme_mi_record_resp_time(ep);
@@ -492,11 +537,11 @@ int nvme_mi_submit(nvme_mi_ep_t ep, struct nvme_mi_req *req,
 		return -1;
 	}
 
-	if ((resp->hdr->nmp & 0x1) != (req->hdr->nmp & 0x1)) {
+	if ((resp->hdr->nmp & NVME_MI_NMP_CSI_MASK) != (req->hdr->nmp & NVME_MI_NMP_CSI_MASK)) {
 		nvme_msg(ep->root, LOG_WARNING,
 			 "Command slot mismatch: req %d, resp %d\n",
-			 req->hdr->nmp & 0x1,
-			 resp->hdr->nmp & 0x1);
+			 req->hdr->nmp & NVME_MI_NMP_CSI_MASK,
+			 resp->hdr->nmp & NVME_MI_NMP_CSI_MASK);
 		errno = EIO;
 		return -1;
 	}
@@ -513,7 +558,7 @@ static void nvme_mi_admin_init_req(struct nvme_mi_req *req,
 
 	hdr->hdr.type = NVME_MI_MSGTYPE_NVME;
 	hdr->hdr.nmp = (NVME_MI_ROR_REQ << 7) |
-		(NVME_MI_MT_ADMIN << 3); /* we always use command slot 0 */
+		(NVME_MI_MT_ADMIN << NVME_MI_NMP_NMIMT_SHIFT); /* we always use command slot 0 */
 	hdr->opcode = opcode;
 	hdr->ctrl_id = cpu_to_le16(ctrl_id);
 
@@ -629,7 +674,7 @@ int nvme_mi_admin_xfer(nvme_mi_ctrl_t ctrl,
 
 	admin_req->hdr.type = NVME_MI_MSGTYPE_NVME;
 	admin_req->hdr.nmp = (NVME_MI_ROR_REQ << 7) |
-				(NVME_MI_MT_ADMIN << 3);
+				(NVME_MI_MT_ADMIN << NVME_MI_NMP_NMIMT_SHIFT) ;
 	admin_req->ctrl_id = cpu_to_le16(ctrl->id);
 	memset(&req, 0, sizeof(req));
 	req.hdr = &admin_req->hdr;
@@ -1495,7 +1540,7 @@ static int nvme_mi_read_data(nvme_mi_ep_t ep, __u32 cdw0,
 	memset(&req_hdr, 0, sizeof(req_hdr));
 	req_hdr.hdr.type = NVME_MI_MSGTYPE_NVME;
 	req_hdr.hdr.nmp = (NVME_MI_ROR_REQ << 7) |
-		(NVME_MI_MT_MI << 3); /* we always use command slot 0 */
+		(NVME_MI_MT_MI << NVME_MI_NMP_NMIMT_SHIFT);
 	req_hdr.opcode = nvme_mi_mi_opcode_mi_data_read;
 	req_hdr.cdw0 = cpu_to_le32(cdw0);
 
@@ -1620,7 +1665,7 @@ int nvme_mi_mi_subsystem_health_status_poll(nvme_mi_ep_t ep, bool clear,
 	memset(&req_hdr, 0, sizeof(req_hdr));
 	req_hdr.hdr.type = NVME_MI_MSGTYPE_NVME;;
 	req_hdr.hdr.nmp = (NVME_MI_ROR_REQ << 7) |
-		(NVME_MI_MT_MI << 3);
+		(NVME_MI_MT_MI << NVME_MI_NMP_NMIMT_SHIFT);
 	req_hdr.opcode = nvme_mi_mi_opcode_subsys_health_status_poll;
 	req_hdr.cdw1 = (clear ? 1 : 0) << 31;
 
@@ -1664,7 +1709,7 @@ int nvme_mi_mi_config_get(nvme_mi_ep_t ep, __u32 dw0, __u32 dw1,
 
 	memset(&req_hdr, 0, sizeof(req_hdr));
 	req_hdr.hdr.type = NVME_MI_MSGTYPE_NVME;
-	req_hdr.hdr.nmp = (NVME_MI_ROR_REQ << 7) | (NVME_MI_MT_MI << 3);
+	req_hdr.hdr.nmp = (NVME_MI_ROR_REQ << 7) | (NVME_MI_MT_MI << NVME_MI_NMP_NMIMT_SHIFT);
 	req_hdr.opcode = nvme_mi_mi_opcode_configuration_get;
 	req_hdr.cdw0 = cpu_to_le32(dw0);
 	req_hdr.cdw1 = cpu_to_le32(dw1);
@@ -1701,7 +1746,7 @@ int nvme_mi_mi_config_set(nvme_mi_ep_t ep, __u32 dw0, __u32 dw1)
 
 	memset(&req_hdr, 0, sizeof(req_hdr));
 	req_hdr.hdr.type = NVME_MI_MSGTYPE_NVME;
-	req_hdr.hdr.nmp = (NVME_MI_ROR_REQ << 7) | (NVME_MI_MT_MI << 3);
+	req_hdr.hdr.nmp = (NVME_MI_ROR_REQ << 7) | (NVME_MI_MT_MI << NVME_MI_NMP_NMIMT_SHIFT);
 	req_hdr.opcode = nvme_mi_mi_opcode_configuration_set;
 	req_hdr.cdw0 = cpu_to_le32(dw0);
 	req_hdr.cdw1 = cpu_to_le32(dw1);

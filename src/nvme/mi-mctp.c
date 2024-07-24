@@ -266,7 +266,7 @@ static bool nvme_mi_mctp_resp_is_mpr(void *buf, size_t len,
 	 * correct size for an Admin response.
 	 */
 	if (!(len == sizeof(*msg) ||
-	      ((msg->hdr.nmp >> 3 & 0x0f) == NVME_MI_MT_ADMIN &&
+	      ((msg->hdr.nmp >> NVME_MI_NMP_NMIMT_SHIFT & 0x0f) == NVME_MI_MT_ADMIN &&
 	       len == sizeof(struct nvme_mi_admin_resp_hdr))))
 	    return false;
 
@@ -694,6 +694,13 @@ err_close_ep:
 	nvme_mi_close(ep);
 	errno = errno_save;
 	return NULL;
+}
+
+__u8 nvme_mi_mctp_get_eid(nvme_mi_ep_t ep)
+{
+	struct nvme_mi_transport_mctp *mctp;
+	mctp = ep->transport_data;
+	return mctp->eid;
 }
 
 #ifdef CONFIG_DBUS

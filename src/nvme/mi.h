@@ -100,6 +100,8 @@
 #define NVME_MI_MSGTYPE_NVME 0x84
 
 /* Basic MI message definitions */
+#define NVME_MI_NMP_NMIMT_MASK (0b01111000)
+#define NVME_MI_NMP_NMIMT_SHIFT (3)
 
 /**
  * enum nvme_mi_message_type - NVMe-MI message type field.
@@ -126,6 +128,35 @@ enum nvme_mi_message_type {
 enum nvme_mi_ror {
 	NVME_MI_ROR_REQ = 0,
 	NVME_MI_ROR_RSP = 1,
+};
+
+/**
+ * enum nvme_mi_cpo: Control Primitive OpCode
+ * @NVME_MI_CPO_PAUSE: Pause
+ * @NVME_MI_CPO_RESUME: Resume
+ * @NVME_MI_CPO_ABORT: Abort
+ * @NVME_MI_CPO_GET_STATE: Get State
+ * @NVME_MI_CPO_REPLAY: Replay
+ * 
+ */
+enum nvme_mi_cpo{
+	NVME_MI_CPO_PAUSE = 0,
+	NVME_MI_CPO_RESUME = 1,
+	NVME_MI_CPO_ABORT = 2,
+	NVME_MI_CPO_GET_STATE = 3,
+	NVME_MI_CPO_REPLAY = 4,
+};
+
+#define NVME_MI_NMP_CSI_MASK (0x1)
+
+/**
+ * enum nvme_mi_csi: Command slot identifier
+ * @NVME_MI_CMD_SLOT_0: Command Slot 0
+ * @NVME_MI_CMD_SLOT_1: Command Slot 1
+ */
+enum nvme_mi_csi {
+	NVME_MI_CSI_0 = 0 << 0,
+	NVME_MI_CSI_1 = 1 << 0,
 };
 
 /**
@@ -307,6 +338,14 @@ enum nvme_mi_config_smbus_freq {
 	NVME_MI_CONFIG_SMBUS_FREQ_400kHz = 0x2,
 	NVME_MI_CONFIG_SMBUS_FREQ_1MHz = 0x3,
 };
+
+/* Primitive Command Definitions*/
+struct nvme_mi_primitive_req_hdr {
+	struct nvme_mi_msg_hdr hdr;
+	__u8	cpo;
+	__u8	tag;
+	__le16	cpsp;
+} __attribute((packed));
 
 /* Admin command definitions */
 
@@ -590,6 +629,14 @@ nvme_mi_ctrl_t nvme_mi_next_ctrl(nvme_mi_ep_t ep, nvme_mi_ctrl_t c);
  * See &nvme_mi_close
  */
 nvme_mi_ep_t nvme_mi_open_mctp(nvme_root_t root, unsigned int netid, uint8_t eid);
+
+/**
+ * nvme_mi_mctp_get_eid() - Extract the endpoint ID from the ep structure
+ * @ep: &nvme_mi_ep_t object
+ *
+ * Return: Stored EID
+ */
+__u8 nvme_mi_mctp_get_eid(nvme_mi_ep_t ep);
 
 /**
  * nvme_mi_open_sim_mctp() - Create an endpoint using a simulated MCTP connection.
