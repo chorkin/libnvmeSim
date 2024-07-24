@@ -173,6 +173,7 @@ enum nvme_mi_resp_status {
 	NVME_MI_RESP_SANITIZE_IN_PROGRESS = 0x2a,
 	/* 0x2b - 0xdf: reserved */
 	/* 0xe0 - 0xff: vendor specific */
+	NVME_MI_RESP_SIM_FAKE_ERROR = 0xe1,
 };
 
 /**
@@ -589,6 +590,20 @@ nvme_mi_ctrl_t nvme_mi_next_ctrl(nvme_mi_ep_t ep, nvme_mi_ctrl_t c);
  * See &nvme_mi_close
  */
 nvme_mi_ep_t nvme_mi_open_mctp(nvme_root_t root, unsigned int netid, uint8_t eid);
+
+/**
+ * nvme_mi_open_sim_mctp() - Create an endpoint using a simulated MCTP connection.
+ * @root: root object to create under
+ * @eid: MCTP endpoint ID
+ * 
+ * Transport-specific endpoint initialization for MI-connected endpoints. Once
+ * an endpoint is created, the rest of the API is transport-independent.
+ *
+ * Return: New endpoint object for or NULL on failure.
+ *
+ * See &nvme_mi_close
+ */
+nvme_mi_ep_t nvme_mi_open_sim_mctp(nvme_root_t root, uint8_t eid);
 
 /**
  * nvme_mi_close() - Close an endpoint connection and release resources,

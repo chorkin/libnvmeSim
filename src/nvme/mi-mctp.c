@@ -99,11 +99,38 @@ static struct __mi_mctp_socket_ops ops = {
 	ioctl_tag,
 };
 
+__u8 g_sim_buffer_out[4*1024+100]={0};
+__u8 g_sim_buffer_in[4*1024+100]={0};
+
+static ssize_t sendmsg_sim(int __fd, const struct msghdr *__message, int __flags)
+{
+	const ssize_t buffer_size = sizeof(g_sim_buffer_in);
+
+	ssize_t offset = 0;
+	for(int seg = 0; seg < __message->msg_iovlen; seg++)
+	{
+		struct iovec *this_segment = &__message->msg_iov[seg];
+		if(offset + this_segment->iov_len <= buffer_size)
+		{
+			memcpy(g_sim_buffer_in + offset, this_segment->iov_base, this_segment->iov_len);
+			offset += this_segment->iov_len;
+		}
+		else
+		{
+			return -1;
+		}
+		
+	}
+
+	return offset;
+}
+
 void __nvme_mi_mctp_set_ops(const struct __mi_mctp_socket_ops *newops)
 {
 	ops = *newops;
 }
 static const struct nvme_mi_transport nvme_mi_transport_mctp;
+static const struct nvme_mi_transport nvme_mi_transport_mctp_sim;
 
 #ifdef SIOCMCTPALLOCTAG
 static __u8 nvme_mi_mctp_tag_alloc(struct nvme_mi_ep *ep)
@@ -175,6 +202,43 @@ struct nvme_mi_msg_resp_mpr {
 	__u16	mprt;
 };
 
+
+static ssize_t recvmsg_sim (int __fd, struct msghdr *__message, int __flags){
+	if(__message != NULL)
+	{
+		memcpy(g_sim_buffer_out+1, g_sim_buffer_in, sizeof(g_sim_buffer_in)-1);//There's a weird offset due to how thes are sent.  The type is dropped
+
+		struct nvme_mi_admin_resp_hdr *msg;
+		msg = (struct nvme_mi_admin_resp_hdr *)g_sim_buffer_out;
+		msg->hdr.nmp = (NVME_MI_ROR_RSP << 7);//This is a response
+		msg->status = NVME_MI_RESP_SUCCESS;
+
+		
+		ssize_t recvSize = sizeof(*msg)+4-1+offsetof(struct nvme_id_ctrl, rab);
+		memcpy(__message->msg_iov->iov_base, g_sim_buffer_out+1, recvSize);
+
+		return recvSize;
+	}
+
+	return -1;
+}
+
+static int poll_sim (struct pollfd *__fds, nfds_t __nfds, int __timeout)
+{
+	sleep(1);
+	return 1;
+}
+
+
+static struct __mi_mctp_socket_ops ops_sim = {
+	socket,
+	sendmsg_sim,
+	recvmsg_sim,
+	poll_sim,
+	ioctl_tag,
+};
+
+
 /* Check if this response was a More Processing Required response; if so,
  * populate the worst-case expected processing time, given in milliseconds.
  *
@@ -220,9 +284,10 @@ static bool nvme_mi_mctp_resp_is_mpr(void *buf, size_t len,
 	return true;
 }
 
-static int nvme_mi_mctp_submit(struct nvme_mi_ep *ep,
+static int nvme_mi_mctp_submit_helper(struct nvme_mi_ep *ep,
 			       struct nvme_mi_req *req,
-			       struct nvme_mi_resp *resp)
+			       struct nvme_mi_resp *resp, 
+				   bool sim)
 {
 	ssize_t len, resp_len, resp_hdr_len, resp_data_len;
 	struct nvme_mi_transport_mctp *mctp;
@@ -235,7 +300,7 @@ static int nvme_mi_mctp_submit(struct nvme_mi_ep *ep,
 	__le32 mic;
 	__u8 tag;
 
-	if (ep->transport != &nvme_mi_transport_mctp) {
+	if (ep->transport != &nvme_mi_transport_mctp && ep->transport != &nvme_mi_transport_mctp_sim) {
 		errno = EINVAL;
 		return -1;
 	}
@@ -278,7 +343,15 @@ static int nvme_mi_mctp_submit(struct nvme_mi_ep *ep,
 	req_msg.msg_iov = req_iov;
 	req_msg.msg_iovlen = i;
 
-	len = ops.sendmsg(mctp->sd, &req_msg, 0);
+	if(!sim)
+	{
+		len = ops.sendmsg(mctp->sd, &req_msg, 0);
+	}
+	else
+	{
+		len = ops_sim.sendmsg(mctp->sd, &req_msg, 0);
+	}
+	
 	if (len < 0) {
 		errno_save = errno;
 		nvme_msg(ep->root, LOG_ERR,
@@ -317,7 +390,14 @@ static int nvme_mi_mctp_submit(struct nvme_mi_ep *ep,
 	pollfds[0].events = POLLIN;
 	timeout = ep->timeout ?: -1;
 retry:
-	rc = ops.poll(pollfds, 1, timeout);
+	if(!sim)
+	{
+		rc = ops.poll(pollfds, 1, timeout);
+	}
+	else
+	{
+		rc = ops_sim.poll(pollfds,1, timeout);
+	}
 	if (rc < 0) {
 		if (errno == EINTR)
 			goto retry;
@@ -336,7 +416,15 @@ retry:
 	}
 
 	rc = -1;
-	len = ops.recvmsg(mctp->sd, &resp_msg, MSG_DONTWAIT);
+	if(!sim)
+	{ 
+		len = ops.recvmsg(mctp->sd, &resp_msg, MSG_DONTWAIT);
+	}
+	else
+	{
+		len = ops_sim.recvmsg(mctp->sd, &resp_msg, MSG_DONTWAIT);
+	}
+	
 
 	if (len < 0) {
 		errno_save = errno;
@@ -424,6 +512,22 @@ out:
 	return rc;
 }
 
+
+static int nvme_mi_mctp_submit(struct nvme_mi_ep *ep,
+			       struct nvme_mi_req *req,
+			       struct nvme_mi_resp *resp)
+{
+	return nvme_mi_mctp_submit_helper(ep, req, resp, false);
+}
+
+static int nvme_mi_mctp_submit_sim(struct nvme_mi_ep *ep,
+			       struct nvme_mi_req *req,
+			       struct nvme_mi_resp *resp)
+{
+	return nvme_mi_mctp_submit_helper(ep, req, resp, true);
+}
+
+
 static void nvme_mi_mctp_close(struct nvme_mi_ep *ep)
 {
 	struct nvme_mi_transport_mctp *mctp;
@@ -460,6 +564,78 @@ static const struct nvme_mi_transport nvme_mi_transport_mctp = {
 	.close = nvme_mi_mctp_close,
 	.desc_ep = nvme_mi_mctp_desc_ep,
 };
+
+
+static const struct nvme_mi_transport nvme_mi_transport_mctp_sim = {
+	.name = "mctp",
+	.mic_enabled = false,
+	.submit = nvme_mi_mctp_submit_sim,
+	.close = nvme_mi_mctp_close,
+	.desc_ep = nvme_mi_mctp_desc_ep,
+};
+
+nvme_mi_ep_t nvme_mi_open_sim_mctp(nvme_root_t root,__u8 eid)
+{
+	struct nvme_mi_transport_mctp *mctp;
+	struct nvme_mi_ep *ep;
+	int errno_save;
+
+	ep = nvme_mi_init_ep(root);
+	if (!ep)
+		return NULL;
+
+	mctp = malloc(sizeof(*mctp));
+	if (!mctp) {
+		errno_save = errno;
+		goto err_close_ep;
+	}
+
+	memset(mctp, 0, sizeof(*mctp));
+	mctp->sd = -1;
+
+	mctp->resp_buf_size = 4096;
+	mctp->resp_buf = malloc(mctp->resp_buf_size);
+	if (!mctp->resp_buf) {
+		errno_save = errno;
+		goto err_free_mctp;
+	}
+
+	mctp->net = 0;
+	mctp->eid = eid;
+
+#if 0
+	mctp->sd = ops.socket(AF_MCTP, SOCK_DGRAM, 0);
+	if (mctp->sd < 0) {
+		errno_save = errno;
+		goto err_free_rspbuf;
+	}
+#else
+	mctp->sd = -1;//Not real
+#endif
+
+	ep->transport = &nvme_mi_transport_mctp_sim;
+	ep->transport_data = mctp;
+
+	/* Assuming an i2c transport at 100kHz, smallest MTU (64+4). Given
+	 * a worst-case clock stretch, and largest-sized packets, we can
+	 * expect up to 1.6s per command/response pair. Allowing for a
+	 * retry or two (handled by lower layers), 5s is a reasonable timeout.
+	 */
+	ep->timeout = 5000;
+
+	return ep;
+
+err_free_rspbuf:
+	free(mctp->resp_buf);
+err_free_mctp:
+	free(mctp);
+err_close_ep:
+	/* the ep->transport is not set yet, so this will not call back
+	 * into nvme_mi_mctp_close() */
+	nvme_mi_close(ep);
+	errno = errno_save;
+	return NULL;
+}
 
 nvme_mi_ep_t nvme_mi_open_mctp(nvme_root_t root, unsigned int netid, __u8 eid)
 {

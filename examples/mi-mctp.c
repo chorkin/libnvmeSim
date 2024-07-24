@@ -678,13 +678,22 @@ int main(int argc, char **argv)
 	nvme_mi_ep_t ep;
 	bool dbus = false, usage = true;
 	uint8_t eid = 0;
-	int rc = 0, net = 0;
+	int rc = 0, net = 0, sim = 0;
 
 	if (argc >= 2 && strcmp(argv[1], "dbus") == 0) {
 		usage = false;
+		sim = false;
 		dbus= true;
 		argv += 1;
 		argc -= 1;
+	} 
+	else if(argc >=2 && strcmp(argv[1], "sim") == 0){
+		usage = false;
+		sim = true;
+		dbus= false;
+		eid = atoi(argv[2]) & 0xff;
+		argv += 2;
+		argc -= 2;	
 	} else if (argc >= 3) {
 		usage = false;
 		net = atoi(argv[1]);
@@ -696,8 +705,9 @@ int main(int argc, char **argv)
 	if (usage) {
 		fprintf(stderr,
 			"usage: %s <net> <eid> [action] [action args]\n"
-			"       %s 'dbus'      [action] [action args]\n",
-			argv[0], argv[0]);
+			"       %s 'dbus'      [action] [action args]\n"
+			"       %s 'sim' <eid> [action] [action args]\n",
+			argv[0], argv[0], argv[0]);
 		fprintf(stderr, "where action is:\n"
 			"  info\n"
 			"  controllers\n"
@@ -759,7 +769,17 @@ int main(int argc, char **argv)
 			free(desc);
 		}
 		nvme_mi_free_root(root);
-	} else {
+	} else if (sim)
+	{
+		root = nvme_mi_create_root(stderr, DEFAULT_LOGLEVEL);
+		if (!root)
+			err(EXIT_FAILURE, "can't create NVMe root");
+		ep = nvme_mi_open_sim_mctp(root, eid);
+		rc = do_action_endpoint(action, ep, argc, argv);
+		nvme_mi_close(ep);
+		nvme_mi_free_root(root);
+	}
+	else {
 		root = nvme_mi_create_root(stderr, DEFAULT_LOGLEVEL);
 		if (!root)
 			err(EXIT_FAILURE, "can't create NVMe root");
