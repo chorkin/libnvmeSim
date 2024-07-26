@@ -40,6 +40,7 @@
 #define AF_MCTP 45
 #endif
 
+
 #if !HAVE_LINUX_MCTP_H
 /* As of kernel v5.15, these AF_MCTP-related definitions are provided by
  * linux/mctp.h. However, we provide a set here while that header percolates
@@ -99,20 +100,27 @@ static struct __mi_mctp_socket_ops ops = {
 	ioctl_tag,
 };
 
-__u8 g_sim_buffer_out[4*1024+100]={0};
-__u8 g_sim_buffer_in[4*1024+100]={0};
+__u8 g_sim_buffer_out[2][4*1024+100]={0};
+__u8 g_sim_buffer_in[2][4*1024+100]={0};
 
 static ssize_t sendmsg_sim(int __fd, const struct msghdr *__message, int __flags)
 {
-	const ssize_t buffer_size = sizeof(g_sim_buffer_in);
+	const ssize_t buffer_size = sizeof(g_sim_buffer_in[0]);
 
+	struct nvme_mi_admin_req_hdr *msg;
+	msg = (struct nvme_mi_admin_req_hdr *)((__u8*)__message->msg_iov->iov_base-1);
+	
+	//Store the tag going out associated with the buffer it's going out to.
+	//We should be generating unique MCTP tags for each of these which associate the responses back in MCTP
+	int tagIdx = msg->hdr.nmp & NVME_MI_NMP_CSI_MASK ? 1 : 0;
+	
 	ssize_t offset = 0;
 	for(int seg = 0; seg < __message->msg_iovlen; seg++)
 	{
 		struct iovec *this_segment = &__message->msg_iov[seg];
 		if(offset + this_segment->iov_len <= buffer_size)
 		{
-			memcpy(g_sim_buffer_in + offset, this_segment->iov_base, this_segment->iov_len);
+			memcpy(g_sim_buffer_in[tagIdx] + offset, this_segment->iov_base, this_segment->iov_len);
 			offset += this_segment->iov_len;
 		}
 		else
@@ -203,19 +211,21 @@ struct nvme_mi_msg_resp_mpr {
 };
 
 
-static ssize_t recvmsg_sim (int __fd, struct msghdr *__message, int __flags){
+static ssize_t recvmsg_sim (int nmp, struct msghdr *__message, int __flags){
 	if(__message != NULL)
 	{
-		memcpy(g_sim_buffer_out+1, g_sim_buffer_in, sizeof(g_sim_buffer_in)-1);//There's a weird offset due to how thes are sent.  The type is dropped
+		__u8 slotIdx = (nmp & NVME_MI_NMP_CSI_MASK)? 1: 0;
+		
+		memcpy(g_sim_buffer_out[slotIdx]+1, g_sim_buffer_in[slotIdx], sizeof(g_sim_buffer_in[0])-1);//There's a weird offset due to how thes are sent.  The type is dropped
 
 		struct nvme_mi_admin_resp_hdr *msg;
-		msg = (struct nvme_mi_admin_resp_hdr *)g_sim_buffer_out;
-		msg->hdr.nmp = (NVME_MI_ROR_RSP << 7);//This is a response
+		msg = (struct nvme_mi_admin_resp_hdr *)g_sim_buffer_out[slotIdx];
+		msg->hdr.nmp |= (NVME_MI_ROR_RSP << 7);//This is a response
 		msg->status = NVME_MI_RESP_SUCCESS;
 
 		
 		ssize_t recvSize = sizeof(*msg)+4-1+offsetof(struct nvme_id_ctrl, rab);
-		memcpy(__message->msg_iov->iov_base, g_sim_buffer_out+1, recvSize);
+		memcpy(__message->msg_iov->iov_base, g_sim_buffer_out[slotIdx]+1, recvSize);
 
 		return recvSize;
 	}
@@ -422,7 +432,7 @@ retry:
 	}
 	else
 	{
-		len = ops_sim.recvmsg(mctp->sd, &resp_msg, MSG_DONTWAIT);
+		len = ops_sim.recvmsg(req->hdr->nmp, &resp_msg, MSG_DONTWAIT);
 	}
 	
 
