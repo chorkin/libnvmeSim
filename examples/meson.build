@@ -40,6 +40,14 @@ executable(
     include_directories: [incdir, internal_incdir]
 )
 
+executable(
+    'mi-mctp_thread_test',
+    ['mi-mctp_thread_test.c'],
+    dependencies: libnvme_mi_dep,
+    include_directories: [incdir, internal_incdir]
+)
+
+
 if libdbus_dep.found()
     executable(
         'mi-conf',
