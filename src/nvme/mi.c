@@ -469,11 +469,11 @@ static int get_lock_for_endpoint_command_slot(nvme_mi_ep_t ep, struct nvme_mi_re
 			else{	
 				if(slot == 0){
 					req->hdr->nmp &= ~NVME_MI_NMP_CSI_MASK;//CSI slot 0 is clearing the bit
-					printf("Using Command Slot 0 on EP %d\n", eid);
+					//printf("Using Command Slot 0 on EP %d\n", eid);
 				}
 				else{
 					req->hdr->nmp |= NVME_MI_NMP_CSI_MASK;//CSI slot 1 is setting the bit
-					printf("Using Command Slot 1 on EP %d\n", eid);
+					//printf("Using Command Slot 1 on EP %d\n", eid);
 				}
 				rc = 0;//Just to be explicit
 				goto EXIT;
