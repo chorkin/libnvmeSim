@@ -12,6 +12,8 @@
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/file.h>
+#include <fcntl.h>
 
 #include <ccan/array_size/array_size.h>
 #include <ccan/endian/endian.h>
@@ -283,6 +285,8 @@ struct nvme_mi_ep *nvme_mi_init_ep(nvme_root_t root)
 	ep->controllers_scanned = false;
 	ep->timeout = default_timeout;
 	ep->mprt_max = 0;
+	ep->csi_fd_locks[0] = 0;
+	ep->csi_fd_locks[1] = 0;
 	list_head_init(&ep->controllers);
 
 	list_add(&root->endpoints, &ep->root_entry);
@@ -413,40 +417,119 @@ static int nvme_mi_verify_resp_mic(struct nvme_mi_resp *resp)
 	return resp->mic != ~crc;
 }
 
-static int nvme_mi_get_semaphore_for_ep(__u8 eid)
+static int get_lock_for_endpoint_command_slot(nvme_mi_ep_t ep, struct nvme_mi_req *req)
 {
-	//TODO:Need to do the work here to open a semaphore with EID with max 2 users
-	//This may also need to spawn a thread to do any cleanup of semaphores in case of crash
-} 
-
-static int nvme_mi_release_slot(nvme_mi_ep_t ep, struct nvme_mi_req *req){
-	//TODO:Need to do the work here to release the semaphore
+	//I think we may need to make this call thread safe
+	struct flock lck = {
+		.l_whence = SEEK_SET,
+		.l_start = 0,
+		.l_len = 0,
+		.l_type = F_WRLCK,
+	};
+	
 	__u8 eid = nvme_mi_mctp_get_eid(ep);
-	__u8 slot = req->hdr->nmp & NVME_MI_NMP_CSI_MASK;
-	LOCK
-	//Update slot files
-	UNLOCK
-	ReleaseSemaphore(eid);
-}
 
-static int nvme_mi_get_free_slot(nvme_mi_ep_t ep, struct nvme_mi_req *req)
-{
-	struct nvme_mi_transport_mctp * mctp;
+	char slot_lockfiles[2][20] ={"",""};
+	int rc = 0;
 
-	if((req->hdr->nmp & NVME_MI_NMP_NMIMT_MASK) >> NVME_MI_NMP_NMIMT_SHIFT == NVME_MI_MT_CONTROL && req->data_len >= sizeof(struct nvme_mi_primitive_req_hdr) ){
-		struct nvme_mi_primitive_req_hdr* prim_data = (struct nvme_mi_primitive_req_hdr*)req->data;
-		if(prim_data->cpo == NVME_MI_CPO_PAUSE || prim_data->cpo == NVME_MI_CPO_RESUME){
-			req->hdr->nmp &= ~NVME_MI_NMP_CSI_MASK;//Clear this for Pause and Resume primatives
-			return 0;
+	for(int i = 0; i < 2; i++){
+		char* target = slot_lockfiles[i];
+		target += sprintf(target, "/tmp/%d_%d", eid, i);
+
+		// Open the lock files if they aren't already opened
+		if(ep->csi_fd_locks[i] <=0 ){
+			ep->csi_fd_locks[i] = open(slot_lockfiles[i], O_CREAT | O_RDWR, 0666);
+			if (ep->csi_fd_locks[i] == -1) {
+				nvme_msg(ep->root, LOG_DEBUG,
+				"Could not open csi locking file %s, error:%d\n", slot_lockfiles[i], ep->csi_fd_locks[i]);
+				rc = ep->csi_fd_locks[i];
+				goto EXIT;
+			}
 		}
 	}
 	
-	int rc = get_semaphore_for_ep(nvme_mi_mctp_get_eid(ep));
-	LOCK;
-	//We need some kind of file object by name in memory here to know if slot 1 or slot two is available
-	UNLOCK;
+	//Loop trying to get a lock
+	while(1){
+		for(int slot = 0; slot < 2; slot++){
+			int lock_status = fcntl (ep->csi_fd_locks[slot], F_OFD_SETLK, &lck);
 
+			// Acquire the lock
+			if(lock_status == -1 && errno == EAGAIN){
+				//printf("Command Slot %d busy\n", slot);
+
+				//This is okay.  Just means it's being used.  Can't proceed yet.
+				continue;
+			}
+			else if (lock_status == -1) {
+				nvme_msg(ep->root, LOG_DEBUG,
+							"Csi locking error %d\n", errno);
+				rc = lock_status;
+				goto EXIT;
+			}
+			else{	
+				if(slot == 0){
+					req->hdr->nmp &= ~NVME_MI_NMP_CSI_MASK;//CSI slot 0 is clearing the bit
+					printf("Using Command Slot 0 on EP %d\n", eid);
+				}
+				else{
+					req->hdr->nmp |= NVME_MI_NMP_CSI_MASK;//CSI slot 1 is setting the bit
+					printf("Using Command Slot 1 on EP %d\n", eid);
+				}
+				rc = 0;//Just to be explicit
+				goto EXIT;
+			}
+		}
+
+		//Sleep if we don't have a lock
+		usleep(100000);//0.1s Sleep
+	}
+
+EXIT:
 	return rc;
+} 
+
+static inline bool should_force_csi_0(struct nvme_mi_req *req){
+	if((req->hdr->nmp & NVME_MI_NMP_NMIMT_MASK) >> NVME_MI_NMP_NMIMT_SHIFT == NVME_MI_MT_CONTROL && req->data_len >= sizeof(struct nvme_mi_primitive_req_hdr) ){
+		struct nvme_mi_primitive_req_hdr* prim_data = (struct nvme_mi_primitive_req_hdr*)req->data;
+		if(prim_data->cpo == NVME_MI_CPO_PAUSE || prim_data->cpo == NVME_MI_CPO_RESUME){
+			//Clear this for Pause and Resume primatives
+			return true;
+		}
+	}
+	return false;
+}
+
+static int nvme_mi_release_slot(nvme_mi_ep_t ep, struct nvme_mi_req *req){
+	struct flock lck = {
+		.l_whence = SEEK_SET,
+		.l_start = 0,
+		.l_len = 0,
+		.l_type = F_UNLCK,
+	};
+
+	if(should_force_csi_0(req)){
+		return 0;//No work to do since we didn't lock
+	}
+	else{
+		int slot = req->hdr->nmp & NVME_MI_NMP_CSI_MASK;
+		int rc = fcntl (ep->csi_fd_locks[slot], F_OFD_SETLK, &lck);
+		if(rc){
+			nvme_msg(ep->root, LOG_DEBUG,
+							"Csi unlocking error %d\n", errno);
+		}			
+		return rc;
+	}
+}
+
+static int nvme_mi_obtain_slot(nvme_mi_ep_t ep, struct nvme_mi_req *req)
+{
+	if(should_force_csi_0(req)){
+		req->hdr->nmp &= ~NVME_MI_NMP_CSI_MASK;
+		return 0;
+	}
+	else{
+		return get_lock_for_endpoint_command_slot(ep, req);;
+	}
 }
 
 int nvme_mi_submit(nvme_mi_ep_t ep, struct nvme_mi_req *req,
@@ -481,7 +564,7 @@ int nvme_mi_submit(nvme_mi_ep_t ep, struct nvme_mi_req *req,
 
 	nvme_mi_ep_probe(ep);
 
-	rc = nvme_mi_get_free_slot(ep, req);//Note that this is going to block for a free slot
+	rc = nvme_mi_obtain_slot(ep, req);//Note that this is going to block for a free slot
 	if (rc) {
 		nvme_msg(ep->root, LOG_INFO, "Failed to secure a command buffer\n");
 		errno = EIO;
@@ -496,7 +579,7 @@ int nvme_mi_submit(nvme_mi_ep_t ep, struct nvme_mi_req *req,
 
 	rc = ep->transport->submit(ep, req, resp);
 
-	nvme_mi_release_slot(ep,req);
+	nvme_mi_release_slot(ep, req);
 
 	if (nvme_mi_ep_has_quirk(ep, NVME_QUIRK_MIN_INTER_COMMAND_TIME))
 		nvme_mi_record_resp_time(ep);
@@ -558,7 +641,7 @@ static void nvme_mi_admin_init_req(struct nvme_mi_req *req,
 
 	hdr->hdr.type = NVME_MI_MSGTYPE_NVME;
 	hdr->hdr.nmp = (NVME_MI_ROR_REQ << 7) |
-		(NVME_MI_MT_ADMIN << NVME_MI_NMP_NMIMT_SHIFT); /* we always use command slot 0 */
+		(NVME_MI_MT_ADMIN << NVME_MI_NMP_NMIMT_SHIFT);
 	hdr->opcode = opcode;
 	hdr->ctrl_id = cpu_to_le16(ctrl_id);
 

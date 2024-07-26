@@ -267,6 +267,9 @@ struct nvme_mi_ep {
 	unsigned int inter_command_us;
 	struct timespec last_resp_time;
 	bool last_resp_time_valid;
+
+	/*CSI Buffer Related Tracking*/
+	int csi_fd_locks[2];
 };
 
 struct nvme_mi_ctrl {
