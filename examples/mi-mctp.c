@@ -40,17 +40,18 @@ static void show_port_smbus(struct nvme_mi_read_port_info *port)
 	printf("    MCTP address: 0x%02x\n", port->smb.mme_addr);
 	printf("    MCTP access freq: 0x%02x\n", port->smb.mme_freq);
 	printf("    NVMe basic management: %s\n",
-	       (port->smb.nvmebm & 0x1) ? "enabled" : "disabled");
+		   (port->smb.nvmebm & 0x1) ? "enabled" : "disabled");
 }
 
-static struct {
+static struct
+{
 	int typeid;
 	const char *name;
 	void (*fn)(struct nvme_mi_read_port_info *);
 } port_types[] = {
-	{ 0x00, "inactive", NULL },
-	{ 0x01, "PCIe", show_port_pcie },
-	{ 0x02, "SMBus", show_port_smbus },
+	{0x00, "inactive", NULL},
+	{0x01, "PCIe", show_port_pcie},
+	{0x02, "SMBus", show_port_smbus},
 };
 
 static int show_port(nvme_mi_ep_t ep, int portid)
@@ -64,10 +65,13 @@ static int show_port(nvme_mi_ep_t ep, int portid)
 	if (rc)
 		return rc;
 
-	if (port.portt < ARRAY_SIZE(port_types)) {
+	if (port.portt < ARRAY_SIZE(port_types))
+	{
 		show_fn = port_types[port.portt].fn;
 		typestr = port_types[port.portt].name;
-	} else {
+	}
+	else
+	{
 		show_fn = NULL;
 		typestr = "INVALID";
 	}
@@ -90,7 +94,8 @@ int do_info(nvme_mi_ep_t ep)
 	int i, rc;
 
 	rc = nvme_mi_mi_read_mi_data_subsys(ep, &ss_info);
-	if (rc) {
+	if (rc)
+	{
 		warn("can't perform Read MI Data operation");
 		return -1;
 	}
@@ -129,13 +134,16 @@ static int show_ctrl(nvme_mi_ep_t ep, uint16_t ctrl_id)
 
 	printf("  Controller id: %d\n", ctrl_id);
 	printf("    port id: %d\n", ctrl.portid);
-	if (ctrl.prii & 0x1) {
+	if (ctrl.prii & 0x1)
+	{
 		uint16_t bdfn = le16_to_cpu(ctrl.pri);
 		printf("    PCIe routing valid\n");
 		printf("    PCIe bus: 0x%02x\n", bdfn >> 8);
 		printf("    PCIe dev: 0x%02x\n", bdfn >> 3 & 0x1f);
 		printf("    PCIe fn : 0x%02x\n", bdfn & 0x7);
-	} else {
+	}
+	else
+	{
 		printf("    PCIe routing invalid\n");
 	}
 	printf("    PCI vendor: %04x\n", le16_to_cpu(ctrl.vid));
@@ -152,13 +160,15 @@ static int do_controllers(nvme_mi_ep_t ep)
 	int rc, i;
 
 	rc = nvme_mi_mi_read_mi_data_ctrl_list(ep, 0, &ctrl_list);
-	if (rc) {
+	if (rc)
+	{
 		warnx("Can't perform Controller List operation");
 		return rc;
 	}
 
 	printf("NVMe controller list:\n");
-	for (i = 0; i < le16_to_cpu(ctrl_list.num); i++) {
+	for (i = 0; i < le16_to_cpu(ctrl_list.num); i++)
+	{
 		uint16_t id = le16_to_cpu(ctrl_list.identifier[i]);
 		show_ctrl(ep, id);
 	}
@@ -166,7 +176,7 @@ static int do_controllers(nvme_mi_ep_t ep)
 }
 
 static const char *__copy_id_str(const void *field, size_t size,
-				 char *buf, size_t buf_size)
+								 char *buf, size_t buf_size)
 {
 	assert(size < buf_size);
 	strncpy(buf, field, size);
@@ -174,11 +184,11 @@ static const char *__copy_id_str(const void *field, size_t size,
 	return buf;
 }
 
-#define copy_id_str(f,b) __copy_id_str(f, sizeof(f), b, sizeof(b))
+#define copy_id_str(f, b) __copy_id_str(f, sizeof(f), b, sizeof(b))
 
 int do_identify(nvme_mi_ep_t ep, int argc, char **argv)
 {
-	struct nvme_identify_args id_args = { 0 };
+	struct nvme_identify_args id_args = {0};
 	struct nvme_mi_ctrl *ctrl;
 	struct nvme_id_ctrl id;
 	uint16_t ctrl_id;
@@ -186,13 +196,15 @@ int do_identify(nvme_mi_ep_t ep, int argc, char **argv)
 	bool partial;
 	int rc, tmp;
 
-	if (argc < 2) {
+	if (argc < 2)
+	{
 		fprintf(stderr, "no controller ID specified\n");
 		return -1;
 	}
 
 	tmp = atoi(argv[1]);
-	if (tmp < 0 || tmp > 0xffff) {
+	if (tmp < 0 || tmp > 0xffff)
+	{
 		fprintf(stderr, "invalid controller ID\n");
 		return -1;
 	}
@@ -202,7 +214,8 @@ int do_identify(nvme_mi_ep_t ep, int argc, char **argv)
 	partial = argc > 2 && !strcmp(argv[2], "--partial");
 
 	ctrl = nvme_mi_init_ctrl(ep, ctrl_id);
-	if (!ctrl) {
+	if (!ctrl)
+	{
 		warn("can't create controller");
 		return -1;
 	}
@@ -219,14 +232,18 @@ int do_identify(nvme_mi_ep_t ep, int argc, char **argv)
 	 * these will be equivalent, aside from the size of the MI
 	 * response.
 	 */
-	if (partial) {
+	if (partial)
+	{
 		rc = nvme_mi_admin_identify_partial(ctrl, &id_args, 0,
-					    offsetof(struct nvme_id_ctrl, rab));
-	} else {
+											offsetof(struct nvme_id_ctrl, rab));
+	}
+	else
+	{
 		rc = nvme_mi_admin_identify(ctrl, &id_args);
 	}
 
-	if (rc) {
+	if (rc)
+	{
 		warn("can't perform Admin Identify command");
 		return -1;
 	}
@@ -248,58 +265,65 @@ int do_control_primitive(nvme_mi_ep_t ep, int argc, char **argv)
 	uint8_t opcode = 0xff;
 	uint16_t cpsr;
 
-	static const struct {
+	static const struct
+	{
 		const char *name;
 		uint8_t opcode;
 	} control_actions[] = {
-		{ "pause", nvme_mi_control_opcode_pause },
-		{ "resume", nvme_mi_control_opcode_resume },
-		{ "abort", nvme_mi_control_opcode_abort },
-		{ "get-state", nvme_mi_control_opcode_get_state },
-		{ "replay", nvme_mi_control_opcode_replay },
+		{"pause", nvme_mi_control_opcode_pause},
+		{"resume", nvme_mi_control_opcode_resume},
+		{"abort", nvme_mi_control_opcode_abort},
+		{"get-state", nvme_mi_control_opcode_get_state},
+		{"replay", nvme_mi_control_opcode_replay},
 	};
 
-	static const char * const slot_state[] = {
+	static const char *const slot_state[] = {
 		"Idle",
 		"Receive",
 		"Process",
 		"Transmit",
 	};
 
-	static const char * const cpas_state[] = {
+	static const char *const cpas_state[] = {
 		"Command aborted after processing completed or no command to abort",
 		"Command aborted before processing began",
 		"Command processing partially completed",
 		"Reserved",
 	};
 
-	if (argc < 2) {
+	if (argc < 2)
+	{
 		fprintf(stderr, "no opcode specified\n");
 		return -1;
 	}
 
 	action = argv[1];
 
-	for (int i = 0; i < ARRAY_SIZE(control_actions); i++) {
-		if (!strcmp(action, control_actions[i].name)) {
+	for (int i = 0; i < ARRAY_SIZE(control_actions); i++)
+	{
+		if (!strcmp(action, control_actions[i].name))
+		{
 			opcode = control_actions[i].opcode;
 			break;
 		}
 	}
 
-	if (opcode == 0xff) {
+	if (opcode == 0xff)
+	{
 		fprintf(stderr, "invalid action specified: %s\n", action);
 		return -1;
 	}
 
 	rc = nvme_mi_control(ep, opcode, 0, &cpsr); /* cpsp reserved in example */
-	if (rc) {
+	if (rc)
+	{
 		warn("can't perform primitive control command");
 		return -1;
 	}
 
 	printf("NVMe control primitive\n");
-	switch (opcode) {
+	switch (opcode)
+	{
 	case nvme_mi_control_opcode_pause:
 		printf(" Pause : cspr is %#x\n", cpsr);
 		printf("  Pause Flag Status Slot 0: %s\n", (cpsr & (1 << 0)) ? "Yes" : "No");
@@ -344,11 +368,13 @@ void fhexdump(FILE *fp, const unsigned char *buf, int len)
 	const int row_len = 16;
 	int i, j;
 
-	for (i = 0; i < len; i += row_len) {
+	for (i = 0; i < len; i += row_len)
+	{
 		char hbuf[row_len * strlen("00 ") + 1];
 		char cbuf[row_len + strlen("|") + 1];
 
-		for (j = 0; (j < row_len) && ((i+j) < len); j++) {
+		for (j = 0; (j < row_len) && ((i + j) < len); j++)
+		{
 			unsigned char c = buf[i + j];
 
 			sprintf(hbuf + j * 3, "%02x ", c);
@@ -373,19 +399,21 @@ void hexdump(const unsigned char *buf, int len)
 
 int do_get_log_page(nvme_mi_ep_t ep, int argc, char **argv)
 {
-	struct nvme_get_log_args args = { 0 };
+	struct nvme_get_log_args args = {0};
 	struct nvme_mi_ctrl *ctrl;
-	uint8_t buf[512];
+	uint8_t buf[1024];
 	uint16_t ctrl_id;
 	int rc, tmp;
 
-	if (argc < 2) {
+	if (argc < 2)
+	{
 		fprintf(stderr, "no controller ID specified\n");
 		return -1;
 	}
 
 	tmp = atoi(argv[1]);
-	if (tmp < 0 || tmp > 0xffff) {
+	if (tmp < 0 || tmp > 0xffff)
+	{
 		fprintf(stderr, "invalid controller ID\n");
 		return -1;
 	}
@@ -396,21 +424,26 @@ int do_get_log_page(nvme_mi_ep_t ep, int argc, char **argv)
 	args.log = buf;
 	args.len = sizeof(buf);
 
-	if (argc > 2) {
+	if (argc > 2)
+	{
 		tmp = atoi(argv[2]);
 		args.lid = tmp & 0xff;
-	} else {
+	}
+	else
+	{
 		args.lid = 0x1;
 	}
 
 	ctrl = nvme_mi_init_ctrl(ep, ctrl_id);
-	if (!ctrl) {
+	if (!ctrl)
+	{
 		warn("can't create controller");
 		return -1;
 	}
 
 	rc = nvme_mi_admin_get_log(ctrl, &args);
-	if (rc) {
+	if (rc)
+	{
 		warn("can't perform Get Log page command");
 		return -1;
 	}
@@ -421,6 +454,7 @@ int do_get_log_page(nvme_mi_ep_t ep, int argc, char **argv)
 	return 0;
 }
 
+
 int do_admin_raw(nvme_mi_ep_t ep, int argc, char **argv)
 {
 	struct nvme_mi_admin_req_hdr req;
@@ -428,35 +462,57 @@ int do_admin_raw(nvme_mi_ep_t ep, int argc, char **argv)
 	struct nvme_mi_ctrl *ctrl;
 	size_t resp_data_len;
 	unsigned long tmp;
-	uint8_t buf[512];
+	uint16_t buff_size;
+
+	
 	uint16_t ctrl_id;
 	uint8_t opcode;
 	__le32 *cdw;
 	int i, rc;
 
-	if (argc < 2) {
+	if (argc < 2)
+	{
 		fprintf(stderr, "no controller ID specified\n");
 		return -1;
 	}
 
-	if (argc < 3) {
+	if (argc < 3)
+	{
 		fprintf(stderr, "no opcode specified\n");
 		return -1;
 	}
 
+	if (argc < 4)
+	{
+		fprintf(stderr, "No return length specified\n");
+		return -1;
+	}
+
 	tmp = atoi(argv[1]);
-	if (tmp > 0xffff) {
+	if (tmp > 0xffff)
+	{
 		fprintf(stderr, "invalid controller ID\n");
 		return -1;
 	}
 	ctrl_id = tmp & 0xffff;
 
 	tmp = atoi(argv[2]);
-	if (tmp > 0xff) {
+	if (tmp > 0xff)
+	{
 		fprintf(stderr, "invalid opcode\n");
 		return -1;
 	}
 	opcode = tmp & 0xff;
+
+	tmp = atoi(argv[3]);
+	if (tmp > 0xffff)
+	{
+		fprintf(stderr, "invalid return length\n");
+		return -1;
+	}
+	buff_size = tmp + sizeof(struct nvme_mi_admin_resp_hdr);
+
+	uint8_t* buf = malloc(buff_size);
 
 	memset(&req, 0, sizeof(req));
 	req.opcode = opcode;
@@ -464,18 +520,29 @@ int do_admin_raw(nvme_mi_ep_t ep, int argc, char **argv)
 
 	/* The cdw10 - cdw16 fields are contiguous in req; set from argv. */
 	cdw = (void *)&req + offsetof(typeof(req), cdw10);
-	for (i = 0; i < 6; i++) {
-		if (argc >= 4 + i)
-			tmp = strtoul(argv[3 + i], NULL, 0);
+	for (i = 0; i < 6; i++)
+	{
+		if (argc >= 5 + i)
+			tmp = strtoul(argv[4 + i], NULL, 0);
 		else
 			tmp = 0;
 		*cdw = cpu_to_le32(tmp & 0xffffffff);
 		cdw++;
 	}
 
+	if(argc >= 11) 
+	tmp = atoi(argv[10]);
+	if (tmp > 0xffffffff)
+	{
+		fprintf(stderr, "invalid cdw2\n");
+		return -1;
+	}
+	req.cdw2  = tmp;
+
 	printf("Admin request:\n");
 	printf(" opcode: 0x%02x\n", req.opcode);
 	printf(" ctrl:   0x%04x\n", le16_to_cpu(req.ctrl_id));
+	printf(" cdw2:   0x%08x\n", le32_to_cpu(req.cdw2));
 	printf(" cdw10:   0x%08x\n", le32_to_cpu(req.cdw10));
 	printf(" cdw11:   0x%08x\n", le32_to_cpu(req.cdw11));
 	printf(" cdw12:   0x%08x\n", le32_to_cpu(req.cdw12));
@@ -485,19 +552,21 @@ int do_admin_raw(nvme_mi_ep_t ep, int argc, char **argv)
 	printf(" raw:\n");
 	hexdump((void *)&req, sizeof(req));
 
-	memset(buf, 0, sizeof(buf));
+	memset(buf, 0, buff_size);
 	resp = (void *)buf;
 
 	ctrl = nvme_mi_init_ctrl(ep, ctrl_id);
-	if (!ctrl) {
+	if (!ctrl)
+	{
 		warn("can't create controller");
 		return -1;
 	}
 
-	resp_data_len = sizeof(buf) - sizeof(*resp);
+	resp_data_len = buff_size - sizeof(*resp);
 
 	rc = nvme_mi_admin_xfer(ctrl, &req, 0, resp, 0, &resp_data_len);
-	if (rc) {
+	if (rc)
+	{
 		warn("nvme_admin_xfer failed: %d", rc);
 		return -1;
 	}
@@ -510,26 +579,30 @@ int do_admin_raw(nvme_mi_ep_t ep, int argc, char **argv)
 	printf(" data [%zd bytes]\n", resp_data_len);
 
 	hexdump(buf + sizeof(*resp), resp_data_len);
+
+	free(buf);
 	return 0;
 }
 
-static struct {
+static struct
+{
 	uint8_t id;
 	const char *name;
 } sec_protos[] = {
-	{ 0x00, "Security protocol information" },
-	{ 0xea, "NVMe" },
-	{ 0xec, "JEDEC Universal Flash Storage" },
-	{ 0xed, "SDCard TrustedFlash Security" },
-	{ 0xee, "IEEE 1667" },
-	{ 0xef, "ATA Device Server Password Security" },
+	{0x00, "Security protocol information"},
+	{0xea, "NVMe"},
+	{0xec, "JEDEC Universal Flash Storage"},
+	{0xed, "SDCard TrustedFlash Security"},
+	{0xee, "IEEE 1667"},
+	{0xef, "ATA Device Server Password Security"},
 };
 
 static const char *sec_proto_description(uint8_t id)
 {
 	unsigned int i;
 
-	for (i = 0; i < ARRAY_SIZE(sec_protos); i++) {
+	for (i = 0; i < ARRAY_SIZE(sec_protos); i++)
+	{
 		if (sec_protos[i].id == id)
 			return sec_protos[i].name;
 	}
@@ -542,24 +615,27 @@ static const char *sec_proto_description(uint8_t id)
 
 int do_security_info(nvme_mi_ep_t ep, int argc, char **argv)
 {
-	struct nvme_security_receive_args args = { 0 };
+	struct nvme_security_receive_args args = {0};
 	nvme_mi_ctrl_t ctrl;
 	int i, rc, n_proto;
 	unsigned long tmp;
 	uint16_t ctrl_id;
-	struct {
-		uint8_t		rsvd[6];
-		uint16_t	len;
-		uint8_t		protocols[256];
+	struct
+	{
+		uint8_t rsvd[6];
+		uint16_t len;
+		uint8_t protocols[256];
 	} proto_info;
 
-	if (argc != 2) {
+	if (argc != 2)
+	{
 		fprintf(stderr, "no controller ID specified\n");
 		return -1;
 	}
 
 	tmp = atoi(argv[1]);
-	if (tmp > 0xffff) {
+	if (tmp > 0xffff)
+	{
 		fprintf(stderr, "invalid controller ID\n");
 		return -1;
 	}
@@ -567,7 +643,8 @@ int do_security_info(nvme_mi_ep_t ep, int argc, char **argv)
 	ctrl_id = tmp & 0xffff;
 
 	ctrl = nvme_mi_init_ctrl(ep, ctrl_id);
-	if (!ctrl) {
+	if (!ctrl)
+	{
 		warn("can't create controller");
 		return -1;
 	}
@@ -578,26 +655,31 @@ int do_security_info(nvme_mi_ep_t ep, int argc, char **argv)
 	args.data_len = sizeof(proto_info);
 
 	rc = nvme_mi_admin_security_recv(ctrl, &args);
-	if (rc) {
+	if (rc)
+	{
 		warnx("can't perform Security Receive command: rc %d", rc);
 		return -1;
 	}
 
-	if (args.data_len < 6) {
+	if (args.data_len < 6)
+	{
 		warnx("Short response in security receive command (%d bytes)",
-		      args.data_len);
+			  args.data_len);
 		return -1;
 	}
 
 	n_proto = be16_to_cpu(proto_info.len);
-	if (args.data_len < 6 + n_proto) {
+	if (args.data_len < 6 + n_proto)
+	{
 		warnx("Short response in security receive command (%d bytes), "
-		      "for %d protocols", args.data_len, n_proto);
+			  "for %d protocols",
+			  args.data_len, n_proto);
 		return -1;
 	}
 
 	printf("Supported protocols:\n");
-	for (i = 0; i < n_proto; i++) {
+	for (i = 0; i < n_proto; i++)
+	{
 		uint8_t id = proto_info.protocols[i];
 		printf("  0x%02x: %s\n", id, sec_proto_description(id));
 	}
@@ -605,20 +687,22 @@ int do_security_info(nvme_mi_ep_t ep, int argc, char **argv)
 	return 0;
 }
 
-struct {
+struct
+{
 	enum nvme_mi_config_smbus_freq id;
 	const char *str;
 } smbus_freqs[] = {
-	{ NVME_MI_CONFIG_SMBUS_FREQ_100kHz, "100k" },
-	{ NVME_MI_CONFIG_SMBUS_FREQ_400kHz, "400k" },
-	{ NVME_MI_CONFIG_SMBUS_FREQ_1MHz,   "1M" },
+	{NVME_MI_CONFIG_SMBUS_FREQ_100kHz, "100k"},
+	{NVME_MI_CONFIG_SMBUS_FREQ_400kHz, "400k"},
+	{NVME_MI_CONFIG_SMBUS_FREQ_1MHz, "1M"},
 };
 
 static const char *smbus_freq_str(enum nvme_mi_config_smbus_freq freq)
 {
 	unsigned int i;
 
-	for (i = 0; i < ARRAY_SIZE(smbus_freqs); i++) {
+	for (i = 0; i < ARRAY_SIZE(smbus_freqs); i++)
+	{
 		if (smbus_freqs[i].id == freq)
 			return smbus_freqs[i].str;
 	}
@@ -630,8 +714,10 @@ static int smbus_freq_val(const char *str, enum nvme_mi_config_smbus_freq *freq)
 {
 	unsigned int i;
 
-	for (i = 0; i < ARRAY_SIZE(smbus_freqs); i++) {
-		if (!strcmp(smbus_freqs[i].str, str)) {
+	for (i = 0; i < ARRAY_SIZE(smbus_freqs); i++)
+	{
+		if (!strcmp(smbus_freqs[i].str, str))
+		{
 			*freq = smbus_freqs[i].id;
 			return 0;
 		}
@@ -653,12 +739,15 @@ int do_config_get(nvme_mi_ep_t ep, int argc, char **argv)
 		port = 0;
 
 	rc = nvme_mi_mi_config_get_smbus_freq(ep, port, &freq);
-	if (rc) {
+	if (rc)
+	{
 		warn("can't query SMBus freq for port %d\n", port);
-	} else {
+	}
+	else
+	{
 		const char *fstr = smbus_freq_str(freq);
 		printf("SMBus access frequency (port %d): %s [0x%x]\n", port,
-		       fstr ?: "unknown", freq);
+			   fstr ?: "unknown", freq);
 	}
 
 	rc = nvme_mi_mi_config_get_mctp_mtu(ep, port, &mtu);
@@ -676,7 +765,8 @@ int do_config_set(nvme_mi_ep_t ep, int argc, char **argv)
 	uint8_t port;
 	int rc;
 
-	if (argc != 4) {
+	if (argc != 4)
+	{
 		fprintf(stderr, "config set requires <port> <type> <val>\n");
 		return -1;
 	}
@@ -685,31 +775,38 @@ int do_config_set(nvme_mi_ep_t ep, int argc, char **argv)
 	name = argv[2];
 	val = argv[3];
 
-	if (!strcmp(name, "freq")) {
+	if (!strcmp(name, "freq"))
+	{
 		enum nvme_mi_config_smbus_freq freq;
 		rc = smbus_freq_val(val, &freq);
-		if (rc) {
+		if (rc)
+		{
 			fprintf(stderr, "unknown SMBus freq %s. "
-				"Try 100k, 400k or 1M\n", val);
+							"Try 100k, 400k or 1M\n",
+					val);
 			return -1;
 		}
 		rc = nvme_mi_mi_config_set_smbus_freq(ep, port, freq);
-
-	} else if (!strcmp(name, "mtu")) {
+	}
+	else if (!strcmp(name, "mtu"))
+	{
 		uint16_t mtu;
 		mtu = atoi(val) & 0xffff;
 		/* controllers should reject this, but prevent the potential
 		 * footgun of disabling futher comunication with the device
 		 */
-		if (mtu < 64) {
+		if (mtu < 64)
+		{
 			fprintf(stderr, "MTU value too small\n");
 			return -1;
 		}
 		rc = nvme_mi_mi_config_set_mctp_mtu(ep, port, mtu);
-
-	} else {
+	}
+	else
+	{
 		fprintf(stderr, "Invalid configuration '%s', "
-			"try freq or mtu\n", name);
+						"try freq or mtu\n",
+				name);
 		return -1;
 	}
 
@@ -719,7 +816,8 @@ int do_config_set(nvme_mi_ep_t ep, int argc, char **argv)
 	return rc;
 }
 
-enum action {
+enum action
+{
 	ACTION_INFO,
 	ACTION_CONTROLLERS,
 	ACTION_IDENTIFY,
@@ -731,11 +829,12 @@ enum action {
 	ACTION_CONTROL_PRIMITIVE,
 };
 
-static int do_action_endpoint(enum action action, nvme_mi_ep_t ep, int argc, char** argv)
+static int do_action_endpoint(enum action action, nvme_mi_ep_t ep, int argc, char **argv)
 {
 	int rc;
 
-	switch (action) {
+	switch (action)
+	{
 	case ACTION_INFO:
 		rc = do_info(ep);
 		break;
@@ -782,12 +881,15 @@ int main(int argc, char **argv)
 	uint8_t eid = 0;
 	int rc = 0, net = 0;
 
-	if (argc >= 2 && strcmp(argv[1], "dbus") == 0) {
+	if (argc >= 2 && strcmp(argv[1], "dbus") == 0)
+	{
 		usage = false;
-		dbus= true;
+		dbus = true;
 		argv += 1;
 		argc -= 1;
-	} else if (argc >= 3) {
+	}
+	else if (argc >= 3)
+	{
 		usage = false;
 		net = atoi(argv[1]);
 		eid = atoi(argv[2]) & 0xff;
@@ -795,58 +897,81 @@ int main(int argc, char **argv)
 		argc -= 2;
 	}
 
-	if (usage) {
+	if (usage)
+	{
 		fprintf(stderr,
-			"usage: %s <net> <eid> [action] [action args]\n"
-			"       %s 'dbus'      [action] [action args]\n",
-			argv[0], argv[0]);
+				"usage: %s <net> <eid> [action] [action args]\n"
+				"       %s 'dbus'      [action] [action args]\n",
+				argv[0], argv[0]);
 		fprintf(stderr, "where action is:\n"
-			"  info\n"
-			"  controllers\n"
-			"  identify <controller-id> [--partial]\n"
-			"  get-log-page <controller-id> [<log-id>]\n"
-			"  admin <controller-id> <opcode> [<cdw10>, <cdw11>, ...]\n"
-			"  security-info <controller-id>\n"
-			"  get-config [port]\n"
-			"  set-config <port> <type> <val>\n"
-			"  control-primitive [action(abort|pause|resume|get-state|replay)]\n"
-			"\n"
-			"  'dbus' target will query D-Bus for known MCTP endpoints\n"
-			);
+						"  info\n"
+						"  controllers\n"
+						"  identify <controller-id> [--partial]\n"
+						"  get-log-page <controller-id> [<log-id>]\n"
+						"  admin <controller-id> <opcode> <return_data_size> [<cdw10>, <cdw11>, ... <cdw2>]\n"
+						"  security-info <controller-id>\n"
+						"  get-config [port]\n"
+						"  set-config <port> <type> <val>\n"
+						"  control-primitive [action(abort|pause|resume|get-state|replay)]\n"
+						"\n"
+						"  'dbus' target will query D-Bus for known MCTP endpoints\n");
 		return EXIT_FAILURE;
 	}
 
-	if (argc == 1) {
+	if (argc == 1)
+	{
 		action = ACTION_INFO;
-	} else {
+	}
+	else
+	{
 		char *action_str = argv[1];
 		argc--;
 		argv++;
 
-		if (!strcmp(action_str, "info")) {
+		if (!strcmp(action_str, "info"))
+		{
 			action = ACTION_INFO;
-		} else if (!strcmp(action_str, "controllers")) {
+		}
+		else if (!strcmp(action_str, "controllers"))
+		{
 			action = ACTION_CONTROLLERS;
-		} else if (!strcmp(action_str, "identify")) {
+		}
+		else if (!strcmp(action_str, "identify"))
+		{
 			action = ACTION_IDENTIFY;
-		} else if (!strcmp(action_str, "get-log-page")) {
+		}
+		else if (!strcmp(action_str, "get-log-page"))
+		{
 			action = ACTION_GET_LOG_PAGE;
-		} else if (!strcmp(action_str, "admin")) {
+		}
+		else if (!strcmp(action_str, "admin"))
+		{
 			action = ACTION_ADMIN_RAW;
-		} else if (!strcmp(action_str, "security-info")) {
+		}
+		else if (!strcmp(action_str, "security-info"))
+		{
 			action = ACTION_SECURITY_INFO;
-		} else if (!strcmp(action_str, "get-config")) {
+		}
+		else if (!strcmp(action_str, "get-config"))
+		{
 			action = ACTION_CONFIG_GET;
-		} else if (!strcmp(action_str, "set-config")) {
+		}
+		else if (!strcmp(action_str, "set-config"))
+		{
 			action = ACTION_CONFIG_SET;
-		} else if (!strcmp(action_str, "control-primitive")) {
+		}
+		else if (!strcmp(action_str, "control-primitive"))
+		{
 			action = ACTION_CONTROL_PRIMITIVE;
-		} else {
+		}
+		else
+		{
 			fprintf(stderr, "invalid action '%s'\n", action_str);
 			return EXIT_FAILURE;
 		}
 	}
-	if (dbus) {
+	if (dbus)
+	{
 		nvme_root_t root;
 		int i = 0;
 
@@ -856,7 +981,8 @@ int main(int argc, char **argv)
 
 		nvme_mi_for_each_endpoint(root, ep) i++;
 		printf("Found %d endpoints in D-Bus:\n", i);
-		nvme_mi_for_each_endpoint(root, ep) {
+		nvme_mi_for_each_endpoint(root, ep)
+		{
 			char *desc = nvme_mi_endpoint_desc(ep);
 			printf("%s\n", desc);
 			rc = do_action_endpoint(action, ep, argc, argv);
@@ -864,7 +990,9 @@ int main(int argc, char **argv)
 			free(desc);
 		}
 		nvme_mi_free_root(root);
-	} else {
+	}
+	else
+	{
 		root = nvme_mi_create_root(stderr, DEFAULT_LOGLEVEL);
 		if (!root)
 			err(EXIT_FAILURE, "can't create NVMe root");
@@ -879,5 +1007,3 @@ int main(int argc, char **argv)
 
 	return rc ? EXIT_FAILURE : EXIT_SUCCESS;
 }
-
-

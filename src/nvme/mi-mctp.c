@@ -504,7 +504,7 @@ nvme_mi_ep_t nvme_mi_open_mctp(nvme_root_t root, unsigned int netid, __u8 eid)
 	 * expect up to 1.6s per command/response pair. Allowing for a
 	 * retry or two (handled by lower layers), 5s is a reasonable timeout.
 	 */
-	ep->timeout = 5000;
+	ep->timeout = 30000;
 
 	return ep;
 
