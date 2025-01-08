@@ -244,6 +244,21 @@ struct nvme_mi_transport {
 	void (*close)(struct nvme_mi_ep *ep);
 	int (*desc_ep)(struct nvme_mi_ep *ep, char *buf, size_t len);
 	int (*check_timeout)(struct nvme_mi_ep *ep, unsigned int timeout);
+	int (*async_poll_fd)(struct nvme_mi_ep *ep, struct pollfd *fd);
+	int (*async_read)(struct nvme_mi_ep *ep,
+			  struct nvme_mi_resp *resp);
+};
+
+struct nvme_mi_aem_ctx {
+	nvme_mi_ep_t ep;
+	struct nvme_mi_ae_occ_list_hdr *occ_header;
+	struct nvme_mi_ae_occ_data *list_start;
+	struct nvme_mi_ae_occ_data *list_current;
+	int list_current_index;
+	const struct nvme_mi_aem_callbacks *callbacks;
+	void *userdata;
+	unsigned int last_generation_num;
+	struct nvme_mi_event event;
 };
 
 /* quirks */
