@@ -414,6 +414,66 @@ static int nvme_mi_verify_resp_mic(struct nvme_mi_resp *resp)
 	return resp->mic != ~crc;
 }
 
+int nvme_mi_async_read(nvme_mi_ep_t ep, struct nvme_mi_resp *resp)
+{
+	int rc = ep->transport->async_read(ep, resp);
+
+	if (nvme_mi_ep_has_quirk(ep, NVME_QUIRK_MIN_INTER_COMMAND_TIME))
+		nvme_mi_record_resp_time(ep);
+
+	if (rc) {
+		nvme_msg(ep->root, LOG_INFO, "transport failure\n");
+		return rc;
+	}
+
+	if (ep->transport->mic_enabled) {
+		rc = nvme_mi_verify_resp_mic(resp);
+		if (rc) {
+			nvme_msg(ep->root, LOG_WARNING, "crc mismatch\n");
+			errno = EBADMSG;
+			return -1;
+		}
+	}
+
+	//TODO: There's a bunch of overlap with the nvme_mi_submit.  Maybe we make common helpers
+
+	/* basic response checks */
+	if (resp->hdr_len < sizeof(struct nvme_mi_msg_hdr)) {
+		nvme_msg(ep->root, LOG_DEBUG,
+			 "Bad response header len: %zd\n", resp->hdr_len);
+		errno = EPROTO;
+		return -1;
+	}
+
+	if (resp->hdr->type != NVME_MI_MSGTYPE_NVME) {
+		nvme_msg(ep->root, LOG_DEBUG,
+			 "Invalid message type 0x%02x\n", resp->hdr->type);
+		errno = EPROTO;
+		return -1;
+	}
+
+	if (!(resp->hdr->nmp & (NVME_MI_ROR_RSP << 7))) {
+		nvme_msg(ep->root, LOG_DEBUG,
+			 "ROR value in response indicates a request\n");
+		errno = EIO;
+		return -1;
+	}
+	
+	//TBD if this is something we need to check (CSI)
+	#if 0
+	if ((resp.hdr->nmp & 0x1) != (req->hdr->nmp & 0x1)) {
+		nvme_msg(ep->root, LOG_WARNING,
+			 "Command slot mismatch: req %d, resp %d\n",
+			 req->hdr->nmp & 0x1,
+			 resp->hdr->nmp & 0x1);
+		errno = EIO;
+		return -1;
+	}
+	#endif
+
+	return 0;
+}
+
 int nvme_mi_submit(nvme_mi_ep_t ep, struct nvme_mi_req *req,
 		   struct nvme_mi_resp *resp)
 {
@@ -625,6 +685,26 @@ static int nvme_mi_control_parse_status(struct nvme_mi_resp *resp, __u16 *cpsr)
 
 	return control_resp->status;
 }
+
+int nvme_mi_get_async_message(nvme_mi_ep_t ep, struct nvme_mi_aem_msg* aem_msg, size_t* aem_msg_len)
+{
+	struct nvme_mi_resp resp;
+
+	memset(&resp, 0, sizeof(resp));
+	resp.hdr = &aem_msg->hdr;
+	resp.hdr_len = sizeof(*aem_msg);
+	resp.data = aem_msg + 1;
+	resp.data_len = *aem_msg_len;
+
+	int rc = nvme_mi_async_read(ep, &resp);
+
+	if (rc)
+		return rc;
+
+	*aem_msg_len = resp.data_len;
+	return 0;
+}
+
 
 int nvme_mi_admin_xfer(nvme_mi_ctrl_t ctrl,
 		       struct nvme_mi_admin_req_hdr *admin_req,
@@ -1798,8 +1878,9 @@ int nvme_mi_mi_subsystem_health_status_poll(nvme_mi_ep_t ep, bool clear,
 	return 0;
 }
 
-int nvme_mi_mi_config_get(nvme_mi_ep_t ep, __u32 dw0, __u32 dw1,
-			  __u32 *nmresp)
+int nvme_mi_mi_config_set_get_ex(nvme_mi_ep_t ep, __u8 opcode, __u32 dw0, 
+				__u32 dw1, void* data_out, size_t data_out_len,
+				void* data_in, size_t* data_in_len, __u32 *nmresp)
 {
 	struct nvme_mi_mi_resp_hdr resp_hdr;
 	struct nvme_mi_mi_req_hdr req_hdr;
@@ -1810,17 +1891,21 @@ int nvme_mi_mi_config_get(nvme_mi_ep_t ep, __u32 dw0, __u32 dw1,
 	memset(&req_hdr, 0, sizeof(req_hdr));
 	req_hdr.hdr.type = NVME_MI_MSGTYPE_NVME;
 	req_hdr.hdr.nmp = (NVME_MI_ROR_REQ << 7) | (NVME_MI_MT_MI << 3);
-	req_hdr.opcode = nvme_mi_mi_opcode_configuration_get;
+	req_hdr.opcode = opcode;
 	req_hdr.cdw0 = cpu_to_le32(dw0);
 	req_hdr.cdw1 = cpu_to_le32(dw1);
 
 	memset(&req, 0, sizeof(req));
 	req.hdr = &req_hdr.hdr;
 	req.hdr_len = sizeof(req_hdr);
+	req.data = data_out;
+	req.data_len = data_out_len;
 
 	memset(&resp, 0, sizeof(resp));
 	resp.hdr = &resp_hdr.hdr;
 	resp.hdr_len = sizeof(resp_hdr);
+	resp.data = data_in;
+	resp.data_len = *data_in_len;
 
 	rc = nvme_mi_submit(ep, &req, &resp);
 	if (rc)
@@ -1829,45 +1914,89 @@ int nvme_mi_mi_config_get(nvme_mi_ep_t ep, __u32 dw0, __u32 dw1,
 	if (resp_hdr.status)
 		return resp_hdr.status;
 
-	*nmresp = resp_hdr.nmresp[0] |
-		  resp_hdr.nmresp[1] << 8 |
-		  resp_hdr.nmresp[2] << 16;
+	*data_in_len = resp.data_len;
+
+	if(nmresp)
+	{
+		*nmresp = resp_hdr.nmresp[0] |
+		resp_hdr.nmresp[1] << 8 |
+		resp_hdr.nmresp[2] << 16;
+	}
 
 	return 0;
+}
+
+int nvme_mi_mi_config_get(nvme_mi_ep_t ep, __u32 dw0, __u32 dw1,
+			  __u32 *nmresp)
+{
+	size_t data_in_len = 0;
+
+	return nvme_mi_mi_config_set_get_ex(ep, nvme_mi_mi_opcode_configuration_get, dw0, dw1, NULL, 0, NULL, &data_in_len, nmresp);
 }
 
 int nvme_mi_mi_config_set(nvme_mi_ep_t ep, __u32 dw0, __u32 dw1)
 {
-	struct nvme_mi_mi_resp_hdr resp_hdr;
-	struct nvme_mi_mi_req_hdr req_hdr;
-	struct nvme_mi_resp resp;
-	struct nvme_mi_req req;
-	int rc;
+	size_t data_in_len = 0;
 
-	memset(&req_hdr, 0, sizeof(req_hdr));
-	req_hdr.hdr.type = NVME_MI_MSGTYPE_NVME;
-	req_hdr.hdr.nmp = (NVME_MI_ROR_REQ << 7) | (NVME_MI_MT_MI << 3);
-	req_hdr.opcode = nvme_mi_mi_opcode_configuration_set;
-	req_hdr.cdw0 = cpu_to_le32(dw0);
-	req_hdr.cdw1 = cpu_to_le32(dw1);
+	return nvme_mi_mi_config_set_get_ex(ep, nvme_mi_mi_opcode_configuration_set, dw0, dw1, NULL, 0, NULL, &data_in_len, NULL);
+}
 
-	memset(&req, 0, sizeof(req));
-	req.hdr = &req_hdr.hdr;
-	req.hdr_len = sizeof(req_hdr);
+int nvme_mi_mi_config_get_async_event(nvme_mi_ep_t ep, 
+				__u8 *aeelver,
+				struct ae_supported_list_t* list,
+				size_t* list_num_bytes)
+{
 
-	memset(&resp, 0, sizeof(resp));
-	resp.hdr = &resp_hdr.hdr;
-	resp.hdr_len = sizeof(resp_hdr);
+	__u32 dw0 = NVME_MI_CONFIG_AE;
+	__u32 aeelvertemp = 0;
 
-	rc = nvme_mi_submit(ep, &req, &resp);
-	if (rc)
+	int rc = nvme_mi_mi_config_set_get_ex(ep, nvme_mi_mi_opcode_configuration_get, dw0, 0, NULL, 0, list, list_num_bytes, &aeelvertemp);
+	if(rc)
 		return rc;
-
-	if (resp_hdr.status)
-		return resp_hdr.status;
+	
+	*aeelver = 0x000F & aeelvertemp;
 
 	return 0;
 }
+
+int nvme_mi_mi_config_set_async_event(nvme_mi_ep_t ep,
+				bool envfa,
+				bool empfa,
+				bool encfa,
+				__u8 aemd,
+				__u8 aerd,
+				struct ae_enable_list_t* enable_list,
+				size_t enable_list_length,
+				struct nvme_mi_ae_occ_list_hdr* occ_list,
+				size_t* occ_list_num_bytes)
+{
+
+	__u32 dw0 = ((__u32)envfa << 26) | 
+				((__u32)empfa << 25) | 
+				((__u32)encfa << 24) | 
+				((__u32)aemd << 16)  | 
+				((__u16) aerd << 8)  | NVME_MI_CONFIG_AE;
+
+	//Basic checks here on lengths
+	if( enable_list_length < sizeof(struct ae_enable_list_t) ||
+		( sizeof(struct ae_enable_list_t) + enable_list->hdr.numaee * sizeof(struct ae_enable_item_t) > enable_list_length )
+	  )
+	{
+		errno = EINVAL;
+		return -1;
+	}
+
+	//Some very baseic header checks
+	if( enable_list->hdr.aeelhl != sizeof(struct ae_enable_list_header_t) ||
+		enable_list->hdr.aeelver != 0)
+	{
+		errno = EINVAL;
+		return -1;		
+	}
+
+	return nvme_mi_mi_config_set_get_ex(ep, nvme_mi_mi_opcode_configuration_set, dw0, 0 , enable_list, enable_list_length, enable_list, occ_list_num_bytes, NULL);
+}
+
 
 void nvme_mi_close(nvme_mi_ep_t ep)
 {

@@ -244,6 +244,8 @@ struct nvme_mi_transport {
 	void (*close)(struct nvme_mi_ep *ep);
 	int (*desc_ep)(struct nvme_mi_ep *ep, char *buf, size_t len);
 	int (*check_timeout)(struct nvme_mi_ep *ep, unsigned int timeout);
+	int (*async_read)(struct nvme_mi_ep *ep,
+			  struct nvme_mi_resp *resp);
 };
 
 /* quirks */

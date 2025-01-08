@@ -220,6 +220,186 @@ static bool nvme_mi_mctp_resp_is_mpr(void *buf, size_t len,
 	return true;
 }
 
+static int nvme_mi_mctp_read(struct nvme_mi_ep *ep,
+			       struct nvme_mi_resp *resp)
+{
+	ssize_t len, resp_len, resp_hdr_len, resp_data_len;
+	struct nvme_mi_transport_mctp *mctp;
+	struct iovec resp_iov[1];
+	struct msghdr resp_msg;
+	int rc, errno_save, timeout;
+	struct sockaddr_mctp addr;
+	struct pollfd pollfds[1];
+	__le32 mic;
+	__u8 tag;
+
+	if (ep->transport != &nvme_mi_transport_mctp) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	/* we need enough space for at least a generic (/error) response */
+	if (resp->hdr_len < sizeof(struct nvme_mi_msg_resp)) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	mctp = ep->transport_data;
+	tag = nvme_mi_mctp_tag_alloc(ep);
+
+	memset(&addr, 0, sizeof(addr));
+	addr.smctp_family = AF_MCTP;
+	addr.smctp_network = mctp->net;
+	addr.smctp_addr.s_addr = mctp->eid;
+	addr.smctp_type = MCTP_TYPE_NVME | MCTP_TYPE_MIC;
+	
+	//
+	//
+	//
+	// NOTE: I think we have to do something special here with the tag, right?
+	// There might also be some kind of binding work!?!
+	//
+	//
+	addr.smctp_tag = tag;
+
+	resp_len = resp->hdr_len + resp->data_len + sizeof(mic);
+	if (resp_len > mctp->resp_buf_size) {
+		void *tmp = realloc(mctp->resp_buf, resp_len);
+		if (!tmp) {
+			errno_save = errno;
+			nvme_msg(ep->root, LOG_ERR,
+				 "Failure allocating response buffer: %m\n");
+			errno = errno_save;
+			rc = -1;
+			goto out;
+		}
+		mctp->resp_buf = tmp;
+		mctp->resp_buf_size = resp_len;
+	}
+
+	/* offset by one: the MCTP message type is excluded from the buffer */
+	resp_iov[0].iov_base = mctp->resp_buf + 1;
+	resp_iov[0].iov_len = resp_len - 1;
+
+	memset(&resp_msg, 0, sizeof(resp_msg));
+	resp_msg.msg_name = &addr;
+	resp_msg.msg_namelen = sizeof(addr);
+	resp_msg.msg_iov = resp_iov;
+	resp_msg.msg_iovlen = 1;
+
+	pollfds[0].fd = mctp->sd;
+	pollfds[0].events = POLLIN;
+	timeout = ep->timeout ?: -1;
+retry:
+	rc = ops.poll(pollfds, 1, timeout);
+	if (rc < 0) {
+		if (errno == EINTR)
+			goto retry;
+		errno_save = errno;
+		nvme_msg(ep->root, LOG_ERR,
+			 "Failed polling on MCTP socket: %m");
+		errno = errno_save;
+		goto out;
+	}
+
+	if (rc == 0) {
+		nvme_msg(ep->root, LOG_DEBUG, "Timeout on MCTP socket");
+		errno = ETIMEDOUT;
+		rc = -1;
+		goto out;
+	}
+
+	rc = -1;
+	len = ops.recvmsg(mctp->sd, &resp_msg, MSG_DONTWAIT);
+
+	if (len < 0) {
+		errno_save = errno;
+		nvme_msg(ep->root, LOG_ERR,
+			 "Failure receiving MCTP message: %m\n");
+		errno = errno_save;
+		goto out;
+	}
+
+
+	if (len == 0) {
+		nvme_msg(ep->root, LOG_WARNING, "No data from MCTP endpoint\n");
+		errno = EIO;
+		goto out;
+	}
+
+	/* Re-add the type byte, so we can work on aligned lengths from here */
+	((uint8_t *)mctp->resp_buf)[0] = MCTP_TYPE_NVME | MCTP_TYPE_MIC;
+	len += 1;
+
+	/* The smallest response data is 8 bytes: generic 4-byte message header
+	 * plus four bytes of error data (excluding MIC). Ensure we have enough.
+	 */
+	if (len < 8 + sizeof(mic)) {
+		nvme_msg(ep->root, LOG_ERR,
+			 "Invalid MCTP response: too short (%zd bytes, needed %zd)\n",
+			 len, 8 + sizeof(mic));
+		errno = EPROTO;
+		goto out;
+	}
+
+	/* Start unpacking the linear resp buffer into the split header + data
+	 * + MIC. We check for a MPR response before fully unpacking, as we'll
+	 * need to preserve the resp layout if we need to retry the receive.
+	 */
+
+	/* MIC is always at the tail */
+	memcpy(&mic, mctp->resp_buf + len - sizeof(mic), sizeof(mic));
+	len -= 4;
+
+#if 0
+	/* Check for a More Processing Required response. This is a slight
+	 * layering violation, as we're pre-checking the MIC and inspecting
+	 * header fields. However, we need to do this in the transport in order
+	 * to keep the tag allocated and retry the recvmsg
+	 */
+	if (nvme_mi_mctp_resp_is_mpr(mctp->resp_buf, len, mic, &mpr_time)) {
+		nvme_msg(ep->root, LOG_DEBUG,
+			 "Received More Processing Required, waiting for response\n");
+
+		/* if the controller hasn't set MPRT, fall back to our command/
+		 * response timeout, or the largest possible MPRT if none set */
+		if (!mpr_time)
+			mpr_time = ep->timeout ?: 0xffff;
+
+		/* clamp to the endpoint max */
+		if (ep->mprt_max && mpr_time > ep->mprt_max)
+			mpr_time = ep->mprt_max;
+
+		timeout = mpr_time;
+		goto retry;
+	}
+#endif
+
+	/* we expect resp->hdr_len bytes, but we may have less */
+	resp_hdr_len = resp->hdr_len;
+	if (resp_hdr_len > len)
+		resp_hdr_len = len;
+	memcpy(resp->hdr, mctp->resp_buf, resp_hdr_len);
+	resp->hdr_len = resp_hdr_len;
+	len -= resp_hdr_len;
+
+	/* any remaining bytes are the data payload */
+	resp_data_len = resp->data_len;
+	if (resp_data_len > len)
+		resp_data_len = len;
+	memcpy(resp->data, mctp->resp_buf + resp_hdr_len, resp_data_len);
+	resp->data_len = resp_data_len;
+
+	resp->mic = le32_to_cpu(mic);
+
+	rc = 0;
+
+out:
+	nvme_mi_mctp_tag_drop(ep, tag);//NOT SURE THIS IS APPLICABLE EITHER
+
+	return rc;
+}
+
 static int nvme_mi_mctp_submit(struct nvme_mi_ep *ep,
 			       struct nvme_mi_req *req,
 			       struct nvme_mi_resp *resp)
@@ -459,6 +639,7 @@ static const struct nvme_mi_transport nvme_mi_transport_mctp = {
 	.submit = nvme_mi_mctp_submit,
 	.close = nvme_mi_mctp_close,
 	.desc_ep = nvme_mi_mctp_desc_ep,
+	.async_read = nvme_mi_mctp_read,
 };
 
 nvme_mi_ep_t nvme_mi_open_mctp(nvme_root_t root, unsigned int netid, __u8 eid)
