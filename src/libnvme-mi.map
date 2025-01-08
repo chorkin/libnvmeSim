@@ -6,6 +6,7 @@ LIBNVME_MI_1_12 {
 LIBNVME_MI_1_11 {
 	global:
 		nvme_mi_control;
+		nvme_mi_get_async_message;
 };
 
 LIBNVME_MI_1_10 {

@@ -413,6 +413,66 @@ static int nvme_mi_verify_resp_mic(struct nvme_mi_resp *resp)
 	return resp->mic != ~crc;
 }
 
+int nvme_mi_async_read(nvme_mi_ep_t ep, struct nvme_mi_resp *resp)
+{
+	int rc = ep->transport->async_read(ep, resp);
+
+	if (nvme_mi_ep_has_quirk(ep, NVME_QUIRK_MIN_INTER_COMMAND_TIME))
+		nvme_mi_record_resp_time(ep);
+
+	if (rc) {
+		nvme_msg(ep->root, LOG_INFO, "transport failure\n");
+		return rc;
+	}
+
+	if (ep->transport->mic_enabled) {
+		rc = nvme_mi_verify_resp_mic(resp);
+		if (rc) {
+			nvme_msg(ep->root, LOG_WARNING, "crc mismatch\n");
+			errno = EBADMSG;
+			return -1;
+		}
+	}
+
+	//TODO: There's a bunch of overlap with the nvme_mi_submit.  Maybe we make common helpers
+
+	/* basic response checks */
+	if (resp->hdr_len < sizeof(struct nvme_mi_msg_hdr)) {
+		nvme_msg(ep->root, LOG_DEBUG,
+			 "Bad response header len: %zd\n", resp->hdr_len);
+		errno = EPROTO;
+		return -1;
+	}
+
+	if (resp->hdr->type != NVME_MI_MSGTYPE_NVME) {
+		nvme_msg(ep->root, LOG_DEBUG,
+			 "Invalid message type 0x%02x\n", resp->hdr->type);
+		errno = EPROTO;
+		return -1;
+	}
+
+	if (!(resp->hdr->nmp & (NVME_MI_ROR_RSP << 7))) {
+		nvme_msg(ep->root, LOG_DEBUG,
+			 "ROR value in response indicates a request\n");
+		errno = EIO;
+		return -1;
+	}
+	
+	//TBD if this is something we need to check (CSI)
+	#if 0
+	if ((resp.hdr->nmp & 0x1) != (req->hdr->nmp & 0x1)) {
+		nvme_msg(ep->root, LOG_WARNING,
+			 "Command slot mismatch: req %d, resp %d\n",
+			 req->hdr->nmp & 0x1,
+			 resp->hdr->nmp & 0x1);
+		errno = EIO;
+		return -1;
+	}
+	#endif
+
+	return 0;
+}
+
 int nvme_mi_submit(nvme_mi_ep_t ep, struct nvme_mi_req *req,
 		   struct nvme_mi_resp *resp)
 {
@@ -624,6 +684,26 @@ static int nvme_mi_control_parse_status(struct nvme_mi_resp *resp, __u16 *cpsr)
 
 	return control_resp->status;
 }
+
+int nvme_mi_get_async_message(nvme_mi_ep_t ep, struct nvme_mi_aem_msg* aem_msg, size_t* aem_msg_len)
+{
+	struct nvme_mi_resp resp;
+
+	memset(&resp, 0, sizeof(resp));
+	resp.hdr = &aem_msg->hdr;
+	resp.hdr_len = sizeof(*aem_msg);
+	resp.data = aem_msg + 1;
+	resp.data_len = *aem_msg_len;
+
+	int rc = nvme_mi_async_read(ep, &resp);
+
+	if (rc)
+		return rc;
+
+	*aem_msg_len = resp.data_len;
+	return 0;
+}
+
 
 int nvme_mi_admin_xfer(nvme_mi_ctrl_t ctrl,
 		       struct nvme_mi_admin_req_hdr *admin_req,

@@ -207,6 +207,7 @@ struct nvme_mi_msg_resp {
 	__u8	rsvd0[3];
 };
 
+
 /**
  * enum nvme_mi_mi_opcode - Operation code for supported NVMe-MI commands.
  * @nvme_mi_mi_opcode_mi_data_read: Read NVMe-MI Data Structure
@@ -306,6 +307,82 @@ enum nvme_mi_config_smbus_freq {
 	NVME_MI_CONFIG_SMBUS_FREQ_400kHz = 0x2,
 	NVME_MI_CONFIG_SMBUS_FREQ_1MHz = 0x3,
 };
+
+/* Asynchronous Event Message definitions*/
+
+/**
+ * struct nvme_mi_ae_occ_data - AEM Message definition.
+ * @aelhlen: AE Occurrence Header Length
+ * @aeosil: AE Occurrence Specific Info Length
+ * @aeovsil: AE Occurrence Vendor Specific Info Length
+ * @aeoui: AE Occurrence Unique ID made up of other subfields
+ *
+ * A single entry of ae occurrence data that comes with an nvme_aem_msg.
+ * Following this structure is variable length AEOSI (occurrence specific
+ * info) and variable length AEVSI (vendor specific info).  The length of
+ * AEOSI is specified by aeosil and the length of AEVSI is specified by
+ * AEVSI.  Neither field is mandatory and shall be ommitted if their length
+ * parameter is set to zero.
+ */
+struct nvme_mi_ae_occ_data{
+	__u8 aelhlen;
+	__u8 aeosil;
+	__u8 aeovsil;
+	struct {
+		__u8 aeoi;
+		__u32 aeocidi;
+		__u8 asesi;
+	} __attribute__((packed)) aeoui;
+}__attribute__((packed));
+_Static_assert(sizeof(struct nvme_mi_ae_occ_data) == 9, "size_of_nvme_mi_ae_occ_data_is_not_9_bytes");
+
+/**
+ * struct nvme_mi_ae_occ_list_hdr - AE occurrence list header
+ * @numaeo: Number of AE Occurrence Data Structures
+ * @aelver: AE Occurrence List Version Number
+ * @aeolli: AE Occurrence List Length Info (AEOLLI)
+ * @aeolhl: AE Occurrence List Header Length (shall be set to 7)
+ * @aemti: AEM Transmission Info 
+ *
+ * The header for the occurrence list.  numaeo defines how many 
+ * nvme_mi_ae_occ_data structures (including variable payaloads) are included.
+ * Following this header is each of the numaeo occurrence data structures.
+ */
+struct nvme_mi_ae_occ_list_hdr{
+	__u8 numaeo;
+	__u8 aelver;
+	struct
+	{
+		unsigned int aeoltl: 23;
+		unsigned int overflow: 1;
+	} __attribute__((packed)) aeolli;
+	__u8 aeolhl;
+	struct
+	{
+		unsigned int aemrc: 3;
+		unsigned int aemgn: 5;
+	} __attribute__((packed)) aemti;
+}__attribute__((packed));
+_Static_assert(sizeof(struct nvme_mi_ae_occ_list_hdr) == 7, "size_of_nvme_mi_ae_occ_list_hdr_is_not_7_bytes");
+
+
+/**
+ * struct nvme_mi_aem_msg - AEM Message definition.
+ * @hdr: the general response message header
+ * @occ_list_hdr: ae occurrence list header.
+ *
+ * Every ae message will start with one of these.  The occ_list_hder wil define
+ * information about how many ae occ data entries are included.  Each entry is
+ * defined by the nvme_mi_ae_occ_data structure which will follow the 
+ * occ_list_hdr.  Each nvme_mi_ae_occ_data structure has a fixed length header
+ * but a variable length payload ude to occurrence specific and vendor specific
+ * info.  For this reason, do not index the nvme_mi_ae_occ data structures by
+ * array or fixed offset.
+ */
+struct nvme_mi_aem_msg {
+	struct nvme_mi_msg_hdr hdr;
+	struct nvme_mi_ae_occ_list_hdr occ_list_hdr;
+} __attribute__((packed));
 
 /* Admin command definitions */
 
@@ -2853,5 +2930,29 @@ int nvme_mi_admin_format_nvm(nvme_mi_ctrl_t ctrl,
  */
 int nvme_mi_admin_sanitize_nvm(nvme_mi_ctrl_t ctrl,
 			       struct nvme_sanitize_nvm_args *args);
+
+				   
+/**
+ * nvme_mi_get_async_message() -  Wait and return AE message
+ * @ep: MI endpoint object
+ * @nvme_mi_aem_msg: buffer for ae message data
+ * @aem_msg_len: size of ae message data buffer, updated to received size
+ *
+ * Waits for ae message data.
+ * 
+ * On success, ae message data is stored in @nvme_mi_aem_msg, which has an optional
+ * appended payload buffer of @aem_msg_len bytes. The actual payload
+ * transferred will be stored in @aem_msg_len. These sizes do not include
+ * the nvme_mi_msg_hdr or occ_list_hdr, so 0 represents no additional payload.
+ * 
+ * See nvme_mi_aem_msg and nvme_mi_ae_occ_list_hdr for detailed descriptions of how
+ * additional data is used iwth the nvme_mi_ae_occ data structure
+ *
+ * See: &struct nvme_mi_aem_msg and &struct nvme_mi_admin_resp_hdr.
+ *
+ * Return: The nvme command status if a response was received (see
+ * &enum nvme_status_field) or -1 with errno set otherwise..
+ */
+int nvme_mi_get_async_message(nvme_mi_ep_t ep, struct nvme_mi_aem_msg* aem_msg, size_t* aem_msg_len);
 
 #endif /* _LIBNVME_MI_MI_H */
