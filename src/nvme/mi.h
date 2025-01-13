@@ -291,6 +291,7 @@ enum nvme_mi_config_id {
 	NVME_MI_CONFIG_SMBUS_FREQ = 0x1,
 	NVME_MI_CONFIG_HEALTH_STATUS_CHANGE = 0x2,
 	NVME_MI_CONFIG_MCTP_MTU = 0x3,
+	NVME_MI_CONFIG_AE = 0x4,
 };
 
 /**
@@ -309,6 +310,94 @@ enum nvme_mi_config_smbus_freq {
 };
 
 /* Asynchronous Event Message definitions*/
+
+/**
+ * struct ae_supported_list_header_t - Asyncronous Event Supported List Header.
+ * @numaes: Number of AE supported data structures that follow the header
+ * @aeslver: AE Supported List Version
+ * @aest: AE Supported list length (including this header)
+ * @aeslhl: AE Supported list header length
+ *
+ * This header preceeds a number, (&numaes), of AE supported data structures
+ */
+struct ae_supported_list_header_t{
+	__u8 numaes; //Should be zero
+	__u8 aeslver;
+	__le16 aest;
+	__u8 aeslhl; //Should be 5
+}__attribute__((packed));
+_Static_assert(sizeof(struct ae_supported_list_header_t) == 5, "size_of_ae_supported_list_header_t_is_not_5_bytes");
+
+
+/**
+ * struct ae_supported_item_t - AE Supported List Item
+ * @aesl: AE supported list item length
+ * @aesi: AE supported info
+ *
+ * Following this header should be hdr.numaes entries of ae_supported_item_t structures
+ */
+struct ae_supported_item_t{
+	__u8 aesl;//Length of this item.  Set to 3
+	struct 
+	{
+		__u16 aeis     : 8; //Identifier of supported ae
+		__u16 reserved : 7;
+		__u16 aese     : 1; //AE Support Enabled
+	}__attribute__((packed)) aesi;
+}__attribute__((packed));
+_Static_assert(sizeof(struct ae_supported_item_t) == 3, "size_of_ae_supported_item_t_is_not_3_bytes");
+
+/**
+ * struct ae_supported_list_t - AE Supported List received with GET CONFIG Asynchronous Event
+ * @hdr: AE supported list header
+ *
+ * Following this header should be hdr.numaes entries of ae_supported_item_t structures
+ */
+struct ae_supported_list_t{
+	struct ae_supported_list_header_t hdr;
+}__attribute__((packed));
+
+/**
+ * struct ae_enable_item_t - AE Enabled item entry
+ * @aeel: AE Enable Length (length of this structure which is 3)
+ * @aeei: AE Enable Info
+ *
+ * Following this header should be hdr.numaes entries of ae_supported_item_t structures
+ */
+struct ae_enable_item_t{
+	__u8 aeel;
+	struct{
+		__u16 aeeid    : 8; //AE identifier
+		__u16 reserved : 7;
+		__u16 aee      : 1; //AE enabled bit
+	}__attribute__((packed)) aeei;
+};
+_Static_assert(sizeof(struct ae_enable_item_t) == 3, "size_of_ae_enable_item_t_is_not_3_bytes");
+
+/**
+ * struct ae_enable_list_header_t - AE Enable list header
+ * @numaee: Number of AE enable items following the header
+ * @aeelver: Version of the AE enable list (zero)
+ * @aeetl: Total length of the AE enable list including header and items
+ * @aeelhl: Header length of this header (5)
+ */
+struct ae_enable_list_header_t{
+	__u8 numaee;
+	__u8 aeelver;
+	__le16 aeetl;
+	__u8 aeelhl;
+}__attribute__((packed));
+_Static_assert(sizeof(struct ae_enable_list_header_t) == 5, "size_of_ae_enable_list_header_t_is_not_5_bytes");
+
+/**
+ * struct ae_enable_list_t - AE enable list sent with SET CONFIG Asyncronous Event
+ * @hdr: AE enable list header
+ *
+ * Following this header should be hdr.numaee entries of ae_enable_item_t structures
+ */
+struct ae_enable_list_t{
+	struct ae_enable_list_header_t hdr;
+}__attribute__((packed));
 
 /**
  * struct nvme_mi_ae_occ_data - AEM Message definition.
@@ -1095,6 +1184,78 @@ static inline int nvme_mi_mi_config_set_mctp_mtu(nvme_mi_ep_t ep, __u8 port,
 	__u32 dw0 = port << 24 | NVME_MI_CONFIG_MCTP_MTU;
 
 	return nvme_mi_mi_config_set(ep, dw0, mtu);
+}
+
+
+/**
+ * nvme_mi_mi_config_get_async_event - get configuration: Asynchronous Event
+ * @ep: endpoint for MI communication
+ * @aeelver: Asynchronous Event Enable List Version Number
+ * @list: AE Supported list header and list contents
+ * @list_num_bytes: number of bytes in the list header and contents buffer.
+ * This will be populated with returned size of list and contents if successful.
+ *
+ * Performs a MI Configuration Get, to query the current enable Asynchronous
+ * Events.  On success, populates @aeelver and the @list with current info,
+ *
+ * Return: The nvme command status if a response was received (see
+ * &enum nvme_status_field) or -1 with errno set otherwise..
+ */
+int nvme_mi_mi_config_get_async_event(nvme_mi_ep_t ep, 
+				__u8 *aeelver,
+				struct ae_supported_list_t* list,
+				size_t* list_num_bytes);
+
+/**
+ * nvme_mi_mi_config_set_async_event - set configuration: Asynchronous Event
+ * @ep: endpoint for MI communication
+ * @envfa: Enable SR-IOV Virtual Functions AE
+ * @empfa: Enable SR-IOV Physical Functions AE
+ * @encfa: Enable PCI Functions AE.
+ * @aemd: AEM Delay Interval (for Sync only)
+ * @aerd: AEM Retry Delay (for Sync only)
+ * @enable_list: ae_enable_list_t structure containing header and items
+ * of events to be enabled or disabled.  This is taken as a delta change
+ * from the current configuration.
+ * @enable_list_length: Length of the enable_list in bytes including header and data.
+ * Meant to catch overrun issues.
+ * @occ_list: Pointer to populate with the occurrence list (header and data)
+ * @occ_list_num_bytes: Total length of provided occ_list buffer in bytes.  Will be 
+ * updated with recieved size if successful
+ * 
+ *
+ * Performs a MI Configuration Set, to ACK (sent after an AEM) or Sync (at anytime to enable
+ * or disable Asynchronous Events).  
+ * 
+ * On success, populates @occ_list.  See TP6035a for details on how occ_list is populated in
+ * ACK versus Sync conditions
+ *
+ * Return: The nvme command status if a response was received (see
+ * &enum nvme_status_field) or -1 with errno set otherwise..
+ */
+int nvme_mi_mi_config_set_async_event(nvme_mi_ep_t ep,
+				bool envfa,
+				bool empfa,
+				bool encfa,
+				__u8 aemd,
+				__u8 aerd,
+				struct ae_enable_list_t* enable_list,
+				size_t enable_list_length,
+				struct nvme_mi_ae_occ_list_hdr* occ_list,
+				size_t* occ_list_num_bytes);
+
+static inline int aem_ack(nvme_mi_ep_t ep,
+				struct nvme_mi_ae_occ_list_hdr* occ_list,
+				size_t* occ_list_num_bytes)
+{
+	//An AEM Ack is defined as a SET CONFIG AE with no AE enable items
+	struct ae_enable_list_t list = {0};
+	list.hdr.aeelhl = sizeof(struct ae_enable_list_header_t);
+	list.hdr.aeelver = 0;
+	list.hdr.aeetl = sizeof(struct ae_enable_list_header_t);
+	list.hdr.numaee = 0;
+	
+	return nvme_mi_mi_config_set_async_event(ep, false, false,false, 0,0,&list, sizeof(list), occ_list, occ_list_num_bytes);
 }
 
 /* Admin channel functions */
