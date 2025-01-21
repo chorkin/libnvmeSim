@@ -312,6 +312,8 @@ retry:
 	rc = -1;
 	len = ops.recvmsg(mctp->sd, &resp_msg, MSG_DONTWAIT);
 
+	//NEED TO WORK IN an EWOULDBLOCK somehow here
+
 	if (len < 0) {
 		errno_save = errno;
 		nvme_msg(ep->root, LOG_ERR,
