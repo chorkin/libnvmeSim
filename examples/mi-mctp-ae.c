@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 /**
  * This file is part of libnvme.
- *
- * Authors: Chuck Horkin <chorkin@microsoft.com>
  */
 
 /**
@@ -54,14 +52,14 @@ static void print_event_info(struct nvme_mi_event *event)
 		printf("EMPTY\n");
 }
 
-enum handler_next_action aem_handler(nvme_mi_ep_t ep, size_t num_events, struct nvme_mi_aem_ctx *aem_ctx, void *userdata)
+enum handler_next_action aem_handler(nvme_mi_ep_t ep, size_t num_events, void *userdata)
 {
 	uint32_t *count = (uint32_t *) userdata;
 	*count = *count+1;
 
 	printf("Received notification #%ls\n with %ld events", count, num_events);
 	for (int i = 0; i < num_events; i++) {
-		struct nvme_mi_event *event = nvme_mi_aem_get_next_event(aem_ctx);
+		struct nvme_mi_event *event = nvme_mi_aem_get_next_event(ep);
 
 		if (event == NULL)
 			printf("Unexpected NULL event\n");
@@ -83,7 +81,6 @@ int main(int argc, char **argv)
 	uint8_t eid = 0;
 	int rc = 0, net = 0;
 	struct nvme_mi_aem_callbacks aem_cb_info = {0};
-	struct nvme_mi_aem_ctx *aem_ctx = NULL;
 	uint32_t notification_counter = 0;
 
 	if (argc == 3) {
@@ -115,13 +112,13 @@ int main(int argc, char **argv)
 	aem_cb_info.aem_handler = aem_handler;
 	aem_cb_info.enabled[0] = true;
 
-	rc = nvme_mi_enable_aem(ep, (const struct nvme_mi_aem_callbacks *)&aem_cb_info, &notification_counter, &aem_ctx);
+	rc = nvme_mi_enable_aem(ep, true, true, true, 2, 2, &aem_cb_info, &notification_counter);
 	if (rc)
 		errx(EXIT_FAILURE, "Can't enable aem:%d", rc);
 
 	struct pollfd fds;
 
-	rc = nvme_mi_get_pollfd(aem_ctx, &fds);
+	rc = nvme_mi_get_pollfd(ep, &fds);
 	if (rc)
 		errx(EXIT_FAILURE, "Can't get pollfd:%d", rc);
 
@@ -137,7 +134,7 @@ int main(int argc, char **argv)
 			//printf("No data within %d milliseconds.\n", timeout);
 		} else {
 			//Time to do the work
-			rc = nvme_mi_aem_process(aem_ctx);
+			rc = nvme_mi_aem_process(ep);
 			if (rc) {
 				errx(EXIT_FAILURE, "nvme_mi_aem_process failed with:%d", rc);
 				return rc;
@@ -146,7 +143,7 @@ int main(int argc, char **argv)
 	}
 
 	//Cleanup
-	nvme_mi_disable_aem(aem_ctx);
+	nvme_mi_disable_aem(ep);
 	nvme_mi_close(ep);
 	nvme_mi_free_root(root);
 

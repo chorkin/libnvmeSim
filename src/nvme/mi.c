@@ -2132,7 +2132,7 @@ static int validate_occ_list_update_ctx(struct nvme_mi_ae_occ_list_hdr *occ_head
 		if (current->aelhlen != sizeof(*current)) {
 			errno = EPROTO;
 			goto err_cleanup;
-		} else if (!ctx->callbacks->enabled[current->aeoui.aeoi]) {
+		} else if (!ctx->callbacks.enabled[current->aeoui.aeoi]) {
 			//This is unexpected as this AE shouldn't be enabled
 			errno = EPROTO;
 			goto err_cleanup;
@@ -2152,12 +2152,12 @@ err_cleanup:
 	return -1;
 }
 
-int nvme_mi_get_pollfd(struct nvme_mi_aem_ctx *ctx, struct pollfd *fs)
+int nvme_mi_get_pollfd(nvme_mi_ep_t ep, struct pollfd *fs)
 {
-	if (!ctx || !ctx->ep || !ctx->ep->transport)
+	if (!ep || !ep->aem_ctx || ep->transport)
 		return -1;
 
-	return ctx->ep->transport->async_poll_fd(ctx->ep, fs);
+	return ep->transport->async_poll_fd(ep, fs);
 }
 
 static void reset_list_info(struct nvme_mi_aem_ctx *ctx)
@@ -2170,11 +2170,15 @@ static void reset_list_info(struct nvme_mi_aem_ctx *ctx)
 }
 
 int nvme_mi_enable_aem(nvme_mi_ep_t ep,
-	const struct nvme_mi_aem_callbacks *callbacks,
-	void *userdata,
-	struct nvme_mi_aem_ctx **ctx)
+	bool envfa,
+	bool empfa,
+	bool encfa,
+	__u8 aemd,
+	__u8 aerd,
+	struct nvme_mi_aem_callbacks *callbacks,
+	void *userdata)
 {
-	if (!ep || !callbacks || !callbacks->aem_handler)
+	if (!ep || !callbacks || !callbacks->aem_handler || ep->aem_ctx)
 		return -1;
 
 	int rc = 0;
@@ -2182,16 +2186,15 @@ int nvme_mi_enable_aem(nvme_mi_ep_t ep,
 	size_t response_len = sizeof(response_buffer);
 	struct nvme_mi_ae_occ_list_hdr *response = (struct nvme_mi_ae_occ_list_hdr *)response_buffer;
 
-	*ctx = malloc(sizeof(**ctx));
-	if (!(*ctx))
+	ep->aem_ctx = malloc(sizeof(*ep->aem_ctx));
+	if (!(ep->aem_ctx))
 		return -1;
 
-	memset(*ctx, 0, sizeof(**ctx));
+	memset(ep->aem_ctx, 0, sizeof(*ep->aem_ctx));
 
-	(*ctx)->ep = ep;//Reference this endpoint
-	reset_list_info((*ctx));
-	(*ctx)->callbacks = callbacks;
-	(*ctx)->userdata = userdata;
+	reset_list_info((ep->aem_ctx));
+	ep->aem_ctx->callbacks = *callbacks;
+	ep->aem_ctx->userdata = userdata;
 
 	size_t msg_len = sizeof(struct ae_enable_list_header_t) + UINT8_MAX * sizeof(struct ae_enable_item_t);
 	struct ae_enable_list_header_t *header = malloc(msg_len);
@@ -2220,36 +2223,34 @@ int nvme_mi_enable_aem(nvme_mi_ep_t ep,
 	}
 
 	//Need to send a AEM Sync to enable things
-	rc = nvme_mi_mi_config_set_async_event(ep, true, true, true, 2, 2, (struct ae_enable_list_t *)header, msg_len, response, &response_len);
+	rc = nvme_mi_mi_config_set_async_event(ep, envfa, empfa, encfa, aemd, aerd, (struct ae_enable_list_t *)header, msg_len, response, &response_len);
 	if (rc)
 		goto cleanup;
 
 	//Parse the response and fire events
-	rc = validate_occ_list_update_ctx(response, response_len, *ctx, false /*generation number shouldn't matter*/);
+	rc = validate_occ_list_update_ctx(response, response_len, ep->aem_ctx, false /*generation number shouldn't matter*/);
 	if (rc)
 		goto cleanup;
 
 	if (response->numaeo)
-		callbacks->aem_handler(ep, response->numaeo, *ctx, userdata);//Return value unused here
+		callbacks->aem_handler(ep, response->numaeo, userdata);//Return value unused here
 
 cleanup:
 	free(header);
 	//Clear these because they won't point to valid memory anymore
-	reset_list_info(*ctx);
+	reset_list_info(ep->aem_ctx);
 
 	if (rc) {
-		free(*ctx);
-		*ctx = NULL;
+		free(ep->aem_ctx);
+		ep->aem_ctx = NULL;
 	}
 	return rc;
 }
 
-int nvme_mi_disable_aem(struct nvme_mi_aem_ctx *ctx)
+int nvme_mi_disable_aem(nvme_mi_ep_t ep)
 {
-	if (!ctx || !ctx->ep)
+	if (!ep || !ep->aem_ctx)
 		return -1;
-
-	nvme_mi_ep_t ep = ctx->ep;
 
 	int rc = 0;
 	//First need to send a disable
@@ -2278,7 +2279,8 @@ int nvme_mi_disable_aem(struct nvme_mi_aem_ctx *ctx)
 	if (rc)
 		return rc;//TODO: Is this the right thing to do?
 
-	free(ctx);
+	free(ep->aem_ctx);
+	ep->aem_ctx = NULL;
 
 	return 0;
 }
@@ -2287,16 +2289,17 @@ int nvme_mi_disable_aem(struct nvme_mi_aem_ctx *ctx)
  *event information.  Will return NULL when end of parsing (or error) is occurred.  spec_info and vend_spec_info
  *Must be copied to persist as they will not be valid after the handler_next_action has returned.
  */
-struct nvme_mi_event *nvme_mi_aem_get_next_event(struct nvme_mi_aem_ctx *aem_ctx)
+struct nvme_mi_event *nvme_mi_aem_get_next_event(nvme_mi_ep_t ep)
 {
-	if (!aem_ctx || !aem_ctx->callbacks || !aem_ctx->list_current || aem_ctx->list_current_index == -1 ||
-	    !aem_ctx->occ_header){
+	if (!ep || !ep->aem_ctx || !ep->aem_ctx->list_current || ep->aem_ctx->list_current_index == -1 ||
+	    !ep->aem_ctx->occ_header){
 		return NULL;
 	}
 
-	if (aem_ctx->occ_header->numaeo < aem_ctx->list_current_index)
+	if (ep->aem_ctx->occ_header->numaeo < ep->aem_ctx->list_current_index)
 		return NULL;
 
+	struct nvme_mi_aem_ctx *aem_ctx = ep->aem_ctx;
 	struct nvme_mi_ae_occ_data *current = aem_ctx->list_current;
 
 	aem_ctx->event.aeoi = current->aeoui.aeoi;
@@ -2319,54 +2322,54 @@ struct nvme_mi_event *nvme_mi_aem_get_next_event(struct nvme_mi_aem_ctx *aem_ctx
  * one (or more) of the struct nvme_mi_aem_callbacks being invoked.
  * NOTE: WE NEED TO LOOK AT AEM GENERATION NUMBER HERE.  See AEMTI
  */
-int nvme_mi_aem_process(struct nvme_mi_aem_ctx *ctx)
+int nvme_mi_aem_process(nvme_mi_ep_t ep)
 {
 	int rc = 0;
 	uint8_t response_buffer[4096];
 	struct nvme_mi_aem_msg *response = (struct nvme_mi_aem_msg *)response_buffer;
 	size_t response_len = sizeof(response_buffer);
 
-	if (!ctx || !ctx->callbacks || !ctx->ep)
+	if (!ep || !ep->aem_ctx)
 		return -1;
 
 	memset(response_buffer, 0, sizeof(response_buffer));
 
 	//Reset context information
-	reset_list_info(ctx);
+	reset_list_info(ep->aem_ctx);
 
-	rc = nvme_mi_get_async_message(ctx->ep, response, &response_len);
+	rc = nvme_mi_get_async_message(ep, response, &response_len);
 	if (rc)
 		goto cleanup;
 
 	//Parse the response and fire events
-	rc = validate_occ_list_update_ctx(&response->occ_list_hdr, response_len, ctx, true /*Ensure unique generation number*/);
+	rc = validate_occ_list_update_ctx(&response->occ_list_hdr, response_len, ep->aem_ctx, true /*Ensure unique generation number*/);
 	if (rc)
 		goto cleanup;
 
 	if (response->occ_list_hdr.numaeo) {
-		enum handler_next_action action = ctx->callbacks->aem_handler(ctx->ep, response->occ_list_hdr.numaeo, ctx, ctx->userdata);//Return value unused here
+		enum handler_next_action action = ep->aem_ctx->callbacks.aem_handler(ep, response->occ_list_hdr.numaeo, ep->aem_ctx->userdata);//Return value unused here
 
-		reset_list_info(ctx);
+		reset_list_info(ep->aem_ctx);
 
 		if (action == Ack) {
 			response_len = sizeof(response_buffer);
-			rc = aem_ack(ctx->ep, &response->occ_list_hdr, &response_len);
+			rc = aem_ack(ep, &response->occ_list_hdr, &response_len);
 			if (rc)
 				goto cleanup;
 
-			rc = validate_occ_list_update_ctx(&response->occ_list_hdr, response_len, ctx, true /*Ensure unique generation number*/);
+			rc = validate_occ_list_update_ctx(&response->occ_list_hdr, response_len, ep->aem_ctx, true /*Ensure unique generation number*/);
 			if (rc)
 				goto cleanup;
 
 			//Callbacks based on ack
 			if (response->occ_list_hdr.numaeo)
-				ctx->callbacks->aem_handler(ctx->ep, response->occ_list_hdr.numaeo, ctx, ctx->userdata);//Return value unused here
+				ep->aem_ctx->callbacks.aem_handler(ep, response->occ_list_hdr.numaeo, ep->aem_ctx->userdata);//Return value unused here
 		}
 	} else {
 		//This is unexpected unless we have duplicates.  But those shouldn't be acked
 	}
 
 cleanup:
-	reset_list_info(ctx);
+	reset_list_info(ep->aem_ctx);
 	return rc;
 }

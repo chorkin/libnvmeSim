@@ -250,12 +250,11 @@ struct nvme_mi_transport {
 };
 
 struct nvme_mi_aem_ctx {
-	nvme_mi_ep_t ep;
 	struct nvme_mi_ae_occ_list_hdr *occ_header;
 	struct nvme_mi_ae_occ_data *list_start;
 	struct nvme_mi_ae_occ_data *list_current;
 	int list_current_index;
-	const struct nvme_mi_aem_callbacks *callbacks;
+	struct nvme_mi_aem_callbacks callbacks;
 	void *userdata;
 	unsigned int last_generation_num;
 	struct nvme_mi_event event;
@@ -285,6 +284,8 @@ struct nvme_mi_ep {
 	unsigned int inter_command_us;
 	struct timespec last_resp_time;
 	bool last_resp_time_valid;
+
+	struct nvme_mi_aem_ctx *aem_ctx;
 };
 
 struct nvme_mi_ctrl {

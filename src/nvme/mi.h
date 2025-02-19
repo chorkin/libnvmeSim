@@ -3350,9 +3350,6 @@ int nvme_mi_admin_sanitize_nvm(nvme_mi_ctrl_t ctrl,
  */
 int nvme_mi_get_async_message(nvme_mi_ep_t ep, struct nvme_mi_aem_msg *aem_msg, size_t *aem_msg_len);
 
-/* opaque structure for AEM reception */
-struct nvme_mi_aem_ctx;
-
 enum handler_next_action {
 	Ack,
 	None,
@@ -3372,7 +3369,7 @@ struct nvme_mi_event {
  *event information.  Will return NO_MORE_DATA when end of parsing is occurred.  spec_info and vend_spec_info
  *Must be copied to persist as they will not be valid after the handler_next_action has returned.
  */
-struct nvme_mi_event *nvme_mi_aem_get_next_event(struct nvme_mi_aem_ctx *aem_ctx);
+struct nvme_mi_event *nvme_mi_aem_get_next_event(nvme_mi_ep_t ep);
 
 /* callbacks for AEM types. NULL is permitted for any member. actual
  * callback argument will be a struct containing the AEM-type-specific
@@ -3388,13 +3385,13 @@ struct nvme_mi_aem_callbacks {
 	 *Note: The ack may contain more data to be processed, causing another callback, but given that data doesn't need
 	 *to be acked again (no ack for an ack) the return value in this case would be ignored
 	 */
-	enum handler_next_action (*aem_handler)(nvme_mi_ep_t ep, size_t num_events, struct nvme_mi_aem_ctx *aem_ctx, void *userdata);
+	enum handler_next_action (*aem_handler)(nvme_mi_ep_t ep, size_t num_events, void *userdata);
 
 	bool enabled[256];
 };
 
 /* returns the pollable fd for this context */
-int nvme_mi_get_pollfd(struct nvme_mi_aem_ctx *ctx, struct pollfd *fs);
+int nvme_mi_get_pollfd(nvme_mi_ep_t ep, struct pollfd *fs);
 
 /* enable AEM reception for this endpoint. *ctx will be populated
  * with a a new AEM context, which the caller can use to retrieve
@@ -3402,18 +3399,22 @@ int nvme_mi_get_pollfd(struct nvme_mi_aem_ctx *ctx, struct pollfd *fs);
  * when readable, caller should invoke nvme_mi_aem_process()
  */
 int nvme_mi_enable_aem(nvme_mi_ep_t ep,
-	const struct nvme_mi_aem_callbacks *callbacks,
-	void *userdata,
-	struct nvme_mi_aem_ctx **ctx);
+	bool envfa,
+	bool empfa,
+	bool encfa,
+	__u8 aemd,
+	__u8 aerd,
+	struct nvme_mi_aem_callbacks *callbacks,
+	void *userdata);
 
 /* disable AEM reception, and return the context to libnvme for cleanup */
-int nvme_mi_disable_aem(struct nvme_mi_aem_ctx *ctx);
+int nvme_mi_disable_aem(nvme_mi_ep_t ep);
 
 /* POLLIN has indicated events, notify libnvme. Will likely result in
  * one (or more) of the struct nvme_mi_aem_callbacks being invoked.
  * NOTE: WE NEED TO LOOK AT AEM GENERATION NUMBER HERE.  See AEMTI
  */
-int nvme_mi_aem_process(struct nvme_mi_aem_ctx *ctx);
+int nvme_mi_aem_process(nvme_mi_ep_t ep);
 
 /* Check the Health Status for the Tx Failure Bit.  If failed, need to re-enable AEMs*/
 int nvme_mi_aem_is_tx_failure(nvme_mi_ep_t ep, bool *tx_failure);
