@@ -3414,7 +3414,7 @@ int nvme_mi_disable_aem(nvme_mi_ep_t ep);
  * one (or more) of the struct nvme_mi_aem_callbacks being invoked.
  * NOTE: WE NEED TO LOOK AT AEM GENERATION NUMBER HERE.  See AEMTI
  */
-int nvme_mi_aem_process(nvme_mi_ep_t ep);
+int nvme_mi_aem_process(nvme_mi_ep_t ep, void *userdata);
 
 /* Check the Health Status for the Tx Failure Bit.  If failed, need to re-enable AEMs*/
 int nvme_mi_aem_is_tx_failure(nvme_mi_ep_t ep, bool *tx_failure);

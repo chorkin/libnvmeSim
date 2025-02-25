@@ -110,20 +110,29 @@ int main(int argc, char **argv)
 		errx(EXIT_FAILURE, "can't open MCTP endpoint %d:%d", net, eid);
 
 	aem_cb_info.aem_handler = aem_handler;
-	aem_cb_info.enabled[0] = true;
+	aem_cb_info.enabled[0x06] = true;
+	aem_cb_info.enabled[0x07] = true;
+	aem_cb_info.enabled[0x08] = true;
 
-	rc = nvme_mi_enable_aem(ep, true, true, true, 2, 2, &aem_cb_info, &notification_counter);
+	aem_cb_info.enabled[0xC0] = true;
+	aem_cb_info.enabled[0xC2] = true;
+	aem_cb_info.enabled[0xC3] = true;
+	aem_cb_info.enabled[0xC4] = true;
+	aem_cb_info.enabled[0xCD] = true;
+	aem_cb_info.enabled[0xCE] = true;
+
+	rc = nvme_mi_enable_aem(ep, true, true, true, 1, 1, &aem_cb_info, &notification_counter);
 	if (rc)
-		errx(EXIT_FAILURE, "Can't enable aem:%d", rc);
+		errx(EXIT_FAILURE, "Can't enable aem:%d (%d)", rc, errno);
 
 	struct pollfd fds;
 
 	rc = nvme_mi_get_pollfd(ep, &fds);
 	if (rc)
-		errx(EXIT_FAILURE, "Can't get pollfd:%d", rc);
+		errx(EXIT_FAILURE, "Can't get pollfd:%d (%d)", rc, errno);
 
 	while (1) {
-		int timeout = 1000; // Timeout in milliseconds ( seconds)
+		int timeout = 3000; // Timeout in milliseconds ( seconds)
 
 		rc = poll(&fds, 1, timeout);
 
@@ -134,9 +143,9 @@ int main(int argc, char **argv)
 			//printf("No data within %d milliseconds.\n", timeout);
 		} else {
 			//Time to do the work
-			rc = nvme_mi_aem_process(ep);
+			rc = nvme_mi_aem_process(ep, &notification_counter);
 			if (rc) {
-				errx(EXIT_FAILURE, "nvme_mi_aem_process failed with:%d", rc);
+				errx(EXIT_FAILURE, "nvme_mi_aem_process failed with:%d (%d)", rc, errno);
 				return rc;
 			}
 		}

@@ -77,7 +77,6 @@ struct sockaddr_mctp {
 
 #define MCTP_TYPE_NVME		0x04
 #define MCTP_TYPE_MIC		0x80
-#define MCTP_TAG_ANY		0xFF
 
 struct nvme_mi_transport_mctp {
 	int	net;
@@ -255,7 +254,6 @@ static int nvme_mi_mctp_read(struct nvme_mi_ep *ep,
 	struct iovec resp_iov[1];
 	struct msghdr resp_msg;
 	int rc, errno_save, timeout;
-	struct sockaddr_mctp addr;
 	struct pollfd pollfds[1];
 	__le32 mic;
 
@@ -265,7 +263,7 @@ static int nvme_mi_mctp_read(struct nvme_mi_ep *ep,
 	}
 
 	/* we need enough space for at least a generic (/error) response */
-	if (resp->hdr_len < sizeof(struct nvme_mi_msg_resp)) {
+	if (resp->hdr_len < sizeof(struct nvme_mi_msg_hdr)) {
 		errno = EINVAL;
 		return -1;
 	}
@@ -293,11 +291,9 @@ static int nvme_mi_mctp_read(struct nvme_mi_ep *ep,
 	resp_iov[0].iov_len = resp_len - 1;
 
 	memset(&resp_msg, 0, sizeof(resp_msg));
-	resp_msg.msg_name = &addr;
-	resp_msg.msg_namelen = sizeof(addr);
 	resp_msg.msg_iov = resp_iov;
 	resp_msg.msg_iovlen = 1;
-
+	
 	pollfds[0].fd = mctp->sd_async;
 	pollfds[0].events = POLLIN;
 	timeout = 1;//1?
@@ -685,9 +681,9 @@ nvme_mi_ep_t nvme_mi_open_mctp(nvme_root_t root, unsigned int netid, __u8 eid)
 	memset(&addr, 0, sizeof(addr));
 	addr.smctp_family = AF_MCTP;
 	addr.smctp_network = mctp->net;
-	addr.smctp_addr.s_addr = mctp->eid;
+	addr.smctp_addr.s_addr = MCTP_ADDR_ANY;//mctp->eid;
 	addr.smctp_type = MCTP_TYPE_NVME | MCTP_TYPE_MIC;
-	addr.smctp_tag = MCTP_TAG_ANY;
+	addr.smctp_tag = MCTP_TAG_OWNER;
 
 	if (bind(mctp->sd_async, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
 		errno_save = errno;

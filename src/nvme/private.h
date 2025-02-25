@@ -255,7 +255,6 @@ struct nvme_mi_aem_ctx {
 	struct nvme_mi_ae_occ_data *list_current;
 	int list_current_index;
 	struct nvme_mi_aem_callbacks callbacks;
-	void *userdata;
 	unsigned int last_generation_num;
 	struct nvme_mi_event event;
 };
