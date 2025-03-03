@@ -423,7 +423,13 @@ int nvme_mi_async_read(nvme_mi_ep_t ep, struct nvme_mi_resp *resp)
 	if (nvme_mi_ep_has_quirk(ep, NVME_QUIRK_MIN_INTER_COMMAND_TIME))
 		nvme_mi_record_resp_time(ep);
 
-	if (rc) {
+	if (rc && errno == EWOULDBLOCK) {
+		//Sometimes we might get owned tag data from the wrong endpoint.
+		//This isn't an error, but we shouldn't process it here
+		
+		resp->data_len = 0;//No data to process
+		return 0;
+	} else if (rc) {
 		nvme_msg(ep->root, LOG_INFO, "transport failure\n");
 		return rc;
 	}
@@ -701,7 +707,6 @@ int nvme_mi_get_async_message(nvme_mi_ep_t ep, struct nvme_mi_aem_msg *aem_msg, 
 	resp.data_len = *aem_msg_len;
 
 	int rc = nvme_mi_async_read(ep, &resp);
-
 	if (rc)
 		return rc;
 
@@ -2151,11 +2156,9 @@ static int validate_occ_list_update_ctx(struct nvme_mi_ae_occ_list_hdr *occ_head
 	for (int i = 0; i < occ_header->numaeo; i++) {
 		//Validate this item
 		if (current->aelhlen != sizeof(*current)) {
-			
 			errno = EPROTO;
 			goto err_cleanup;
 		} else if (!ctx->callbacks.enabled[current->aeoui.aeoi]) {
-			
 			//This is unexpected as this AE shouldn't be enabled
 			errno = EPROTO;
 			goto err_cleanup;
@@ -2164,7 +2167,6 @@ static int validate_occ_list_update_ctx(struct nvme_mi_ae_occ_list_hdr *occ_head
 		//Okay, check data lengths, including this header and the specific data(s)
 		bytes_so_far += sizeof(*current) + current->aeosil + current->aeovsil;
 		if (bytes_so_far > occ_header->aeolli.aeoltl) {
-			
 			errno = EPROTO;
 			goto err_cleanup;
 		}
@@ -2328,23 +2330,37 @@ int nvme_mi_disable_aem(nvme_mi_ep_t ep)
 	if (!ep || !ep->aem_ctx)
 		return -1;
 
+	const int NUM_ENABLES = UINT8_MAX;
+
 	int rc = 0;
 	//First need to send a disable
-	size_t msg_len = sizeof(struct ae_enable_list_header_t) + UINT8_MAX * sizeof(struct ae_enable_item_t);
+	size_t msg_len = sizeof(struct ae_enable_list_header_t) + NUM_ENABLES * sizeof(struct ae_enable_item_t);
 	struct ae_enable_list_header_t *header = malloc(msg_len);
 
 	header->aeelhl = sizeof(struct ae_enable_list_header_t);
-	header->numaee = UINT8_MAX;//Full list
+	header->numaee = NUM_ENABLES;
 	header->aeelver = 0;
 	header->aeetl = msg_len;
 
 	struct ae_enable_item_t *items = (struct ae_enable_item_t *)(header + 1);//Data follows header
 
 	//Let's be explicit about what's enabled and what's not
+	int current_index = 0;
+
 	for (int i = 0; i < UINT8_MAX; i++) {
-		items[i].aeei.aee = 0;
-		items[i].aeei.aeeid = i;
+		//Disable all the enabled callbacks
+		if (ep->aem_ctx->callbacks.enabled[i]) {
+			items[current_index].aeel = sizeof(items[i]);
+			items[current_index].aeei.aee = 0;
+			items[current_index].aeei.aeeid = i;
+			current_index++;
+		}
 	}
+
+	//Recalculate since we're not going to actually send a full list
+	header->numaee = current_index;
+	msg_len = sizeof(struct ae_enable_list_header_t) + header->numaee * sizeof(struct ae_enable_item_t);
+	header->aeetl = msg_len;
 
 	uint8_t response_buffer[4096] = {0};
 	size_t response_len = sizeof(response_buffer);
@@ -2461,6 +2477,12 @@ int nvme_mi_aem_process(nvme_mi_ep_t ep, void *userdata)
 
 	if (rc)
 		goto cleanup;
+
+	if (!response_len) {
+		//If no error and response length zero, we've likely recieved an owned tag message from
+		//a different endpoint than this path is responsible for monitoring.  Nothing else to do here.
+		goto cleanup;
+	}
 
 	//Parse the response and fire events
 	rc = validate_occ_list_update_ctx(&response->occ_list_hdr, response_len, ep->aem_ctx, true /*Ensure unique generation number*/);

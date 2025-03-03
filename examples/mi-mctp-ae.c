@@ -22,6 +22,7 @@
 
 #include <ccan/array_size/array_size.h>
 #include <ccan/endian/endian.h>
+#include <sys/select.h>
 
 // Function to print the byte array
 static void print_byte_array(void *data, size_t len)
@@ -98,9 +99,6 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
-	//Otherwise, let's just jump into the loop
-	printf("To exit, terminate with CTRL+C\n");
-
 	root = nvme_mi_create_root(stderr, DEFAULT_LOGLEVEL);
 	if (!root)
 		err(EXIT_FAILURE, "can't create NVMe root");
@@ -121,7 +119,7 @@ int main(int argc, char **argv)
 	aem_cb_info.enabled[0xCD] = true;
 	aem_cb_info.enabled[0xCE] = true;
 
-	rc = nvme_mi_enable_aem(ep, true, true, true, 1, 1, &aem_cb_info, &notification_counter);
+	rc = nvme_mi_enable_aem(ep, true, true, true, 1, 4, &aem_cb_info, &notification_counter);
 	if (rc)
 		errx(EXIT_FAILURE, "Can't enable aem:%d (%d)", rc, errno);
 
@@ -131,10 +129,38 @@ int main(int argc, char **argv)
 	if (rc)
 		errx(EXIT_FAILURE, "Can't get pollfd:%d (%d)", rc, errno);
 
+	printf("Press any key to exit\n");
 	while (1) {
-		int timeout = 3000; // Timeout in milliseconds ( seconds)
+		int poll_timeout = 500; // Timeout in milliseconds
 
-		rc = poll(&fds, 1, timeout);
+		fd_set read_fds;
+		struct timeval std_in_timeout;
+		int retval;
+
+		// Initialize the file descriptor set
+		FD_ZERO(&read_fds);
+		FD_SET(STDIN_FILENO, &read_fds);
+
+		// Set timeout to 0 seconds for non-blocking
+		std_in_timeout.tv_sec = 0;
+		std_in_timeout.tv_usec = 0;
+
+		// Check if there's input on stdin
+		retval = select(STDIN_FILENO + 1, &read_fds, NULL, NULL, &std_in_timeout);
+
+		if (retval == -1) {
+			perror("select()");
+			exit(EXIT_FAILURE);
+		} else if (retval) {
+			char c = getchar();
+
+			if (c != EOF) {
+				printf("Key pressed: %c\n", c);
+				break;
+			}
+		}
+
+		rc = poll(&fds, 1, poll_timeout);
 
 		if (rc == -1) {
 			perror("poll");

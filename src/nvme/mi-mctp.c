@@ -65,6 +65,7 @@ struct sockaddr_mctp {
 	__u8			__smctp_pad1;
 };
 
+
 #define MCTP_NET_ANY		0x0
 
 #define MCTP_ADDR_NULL		0x00
@@ -250,6 +251,7 @@ static int nvme_mi_mctp_read(struct nvme_mi_ep *ep,
 			       struct nvme_mi_resp *resp)
 {
 	ssize_t len, resp_len, resp_hdr_len, resp_data_len;
+	struct sockaddr_mctp src_addr = { 0 };
 	struct nvme_mi_transport_mctp *mctp;
 	struct iovec resp_iov[1];
 	struct msghdr resp_msg;
@@ -293,7 +295,9 @@ static int nvme_mi_mctp_read(struct nvme_mi_ep *ep,
 	memset(&resp_msg, 0, sizeof(resp_msg));
 	resp_msg.msg_iov = resp_iov;
 	resp_msg.msg_iovlen = 1;
-	
+	resp_msg.msg_name = &src_addr;
+	resp_msg.msg_namelen = sizeof(src_addr);
+
 	pollfds[0].fd = mctp->sd_async;
 	pollfds[0].events = POLLIN;
 	timeout = 1;//1?
@@ -331,6 +335,18 @@ retry:
 	if (len == 0) {
 		nvme_msg(ep->root, LOG_WARNING, "No data from MCTP endpoint\n");
 		errno = EIO;
+		goto out;
+	}
+
+	if (resp_msg.msg_namelen < sizeof(src_addr)) {
+		nvme_msg(ep->root, LOG_WARNING, "Unexpected src address length\n");
+		errno = EIO;
+		goto out;
+	}
+
+	if (mctp->eid != src_addr.smctp_addr.s_addr) {
+		//This does not belong to the endpoint we're monitoring
+		errno = EWOULDBLOCK;
 		goto out;
 	}
 
@@ -378,8 +394,6 @@ retry:
 	rc = 0;
 
 out:
-	//nvme_mi_mctp_tag_drop(ep, tag);//NOT SURE THIS IS APPLICABLE EITHER
-
 	return rc;
 }
 
